@@ -28,34 +28,44 @@ lastDivBefore = H(end, 3);
 lastDivParticle = H(end, 5);
 lastReduction = lastDivParticle / max(lastDivBefore, eps);
 maxPopDeltaProjection = max(H(:, 14));
+maxPopForecastProjectedMinusClassic = max(H(:, 21));
+lastPopForecastProjectedMinusClassicRms = H(end, 18);
 
 result = struct();
 result.lastDivBefore = lastDivBefore;
 result.lastDivParticle = lastDivParticle;
 result.lastReduction = lastReduction;
 result.maxPopDeltaProjection = maxPopDeltaProjection;
+result.maxPopForecastProjectedMinusClassic = maxPopForecastProjectedMinusClassic;
+result.lastPopForecastProjectedMinusClassicRms = lastPopForecastProjectedMinusClassicRms;
 result.nuEff = out.viscosity.nuEff;
 result.R2 = out.viscosity.R2;
 result.passFinite = all(isfinite(state.x(:))) && all(isfinite(state.v(:))) && all(isfinite(H(:)));
 result.passDomain = all(state.x(:,1) >= 0 & state.x(:,1) < params.Lx) && all(state.x(:,2) >= 0 & state.x(:,2) <= params.Ly);
 result.passProjection = lastReduction < 1e-10;
 result.passPopulationUnchangedByProjection = maxPopDeltaProjection == 0;
+result.passPopulationForecastFinite = isfinite(maxPopForecastProjectedMinusClassic) && ...
+    isfinite(lastPopForecastProjectedMinusClassicRms);
 result.passKBT = H(end, 7) > 0 && H(end, 7) < 10 * params.kBT;
 result.passViscosityFinite = isfinite(out.viscosity.nuEff);
 result.passed = result.passFinite && result.passDomain && result.passProjection && ...
-    result.passPopulationUnchangedByProjection && result.passKBT && result.passViscosityFinite;
+    result.passPopulationUnchangedByProjection && result.passPopulationForecastFinite && ...
+    result.passKBT && result.passViscosityFinite;
 
 fprintf('\n=== test_projection_poiseuille_short ===\n');
 fprintf('last rms div before        : %.12e\n', result.lastDivBefore);
 fprintf('last rms div particle      : %.12e\n', result.lastDivParticle);
 fprintf('last reduction             : %.12e\n', result.lastReduction);
 fprintf('max pop delta projection   : %.12e\n', result.maxPopDeltaProjection);
+fprintf('forecast pop diff rms      : %.12e\n', result.lastPopForecastProjectedMinusClassicRms);
+fprintf('forecast pop diff max      : %.12e\n', result.maxPopForecastProjectedMinusClassic);
 fprintf('nu_eff                     : %.12e\n', result.nuEff);
 fprintf('R2                         : %.6f\n', result.R2);
 fprintf('passFinite                 : %d\n', result.passFinite);
 fprintf('passDomain                 : %d\n', result.passDomain);
 fprintf('passProjection             : %d\n', result.passProjection);
 fprintf('passPopulationNoChange     : %d\n', result.passPopulationUnchangedByProjection);
+fprintf('passPopulationForecast     : %d\n', result.passPopulationForecastFinite);
 fprintf('passKBT                    : %d\n', result.passKBT);
 fprintf('passViscosityFinite        : %d\n', result.passViscosityFinite);
 fprintf('passed                     : %d\n', result.passed);

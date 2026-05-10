@@ -13,12 +13,8 @@ end
 params = set_default_params(params);
 
 rng(params.seed);
-Np = round(params.gamma * params.Nx * params.Ny);
-state = struct();
-state.x = [params.Lx * rand(Np, 1), params.Ly * rand(Np, 1)];
-state.v = sqrt(params.kBT) * randn(Np, 2);
-state.v(:, 1) = state.v(:, 1) - mean(state.v(:, 1));
-state.v(:, 2) = state.v(:, 2) - mean(state.v(:, 2));
+[state, initInfo] = projection_initialize_particles(params);
+Np = initInfo.Np;
 
 nSamples = floor(params.nSteps / params.sampleEvery) + 1;
 sampleTimes = nan(nSamples, 1);
@@ -26,6 +22,11 @@ sampleSteps = nan(nSamples, 1);
 UxProfiles = nan(params.Ny, nSamples);
 UyProfiles = nan(params.Ny, nSamples);
 NProfiles = nan(params.Ny, nSamples);
+if params.storeDensityMaps
+    NMaps = nan(params.Nx, params.Ny, nSamples);
+else
+    NMaps = [];
+end
 diagHistory = nan(nSamples, 51);
 % Main columns are documented in out.diagColumns below. The first 24 columns
 % are the original Q3/Q3b diagnostics; later columns add thermal, thermostat
@@ -44,6 +45,9 @@ for it = 0:params.nSteps
         UxProfiles(:, isamp) = mean(G.Ux, 1).';
         UyProfiles(:, isamp) = mean(G.Uy, 1).';
         NProfiles(:, isamp) = mean(G.N, 1).';
+        if params.storeDensityMaps
+            NMaps(:, :, isamp) = double(G.N);
+        end
         sampleTimes(isamp) = it * params.dt;
         sampleSteps(isamp) = it;
     end
@@ -130,12 +134,16 @@ sampleSteps = sampleSteps(valid);
 UxProfiles = UxProfiles(:, valid);
 UyProfiles = UyProfiles(:, valid);
 NProfiles = NProfiles(:, valid);
+if params.storeDensityMaps
+    NMaps = NMaps(:, :, valid);
+end
 diagHistory = diagHistory(isfinite(diagHistory(:, 1)), :);
 
 yCenters = ((0:params.Ny-1).' + 0.5) * params.Ly / params.Ny;
 
 out = struct();
 out.params = params;
+out.initialization = initInfo;
 out.state = state;
 out.sampleTimes = sampleTimes;
 out.sampleSteps = sampleSteps;
@@ -143,6 +151,7 @@ out.yCenters = yCenters;
 out.UxProfiles = UxProfiles;
 out.UyProfiles = UyProfiles;
 out.NProfiles = NProfiles;
+out.NMaps = NMaps;
 out.diagHistory = diagHistory;
 out.actualLastStep = actualLastStep;
 out.stoppedEarly = actualLastStep < params.nSteps;
@@ -175,6 +184,8 @@ out.viscosity = analyze_projection_poiseuille_viscosity(out, ...
 
 fprintf('\n=== run_projection_poiseuille_demo ===\n');
 fprintf('Np                         : %d\n', Np);
+fprintf('initialPopulationMode      : %s\n', initInfo.mode);
+fprintf('initial std(N), outband20  : %.6g / %.6g\n', initInfo.initialStdN, initInfo.initialOutBand20);
 fprintf('grid                       : %d x %d\n', params.Nx, params.Ny);
 fprintf('steps completed            : %d / %d in %.2f s\n', out.actualLastStep, params.nSteps, out.elapsedWallClock);
 if out.stoppedEarly
@@ -229,6 +240,9 @@ params = set_default(params, 'projectionInterpolationMethod', 'nearest');
 params = set_default(params, 'projectionTransportDiagnosticsEnable', true);
 params = set_default(params, 'densityTransportDiagnosticsEnable', true);
 params = set_default(params, 'computeFullDiagnosticsEveryStep', false);
+params = set_default(params, 'storeDensityMaps', false);
+params = set_default(params, 'initialPopulationMode', 'random_uniform');
+params = set_default(params, 'initialVelocityZeroGlobalMean', true);
 params = set_default(params, 'thermostatAfterProjection', false);
 params = set_default(params, 'thermostatTargetKBT', params.kBT);
 params = set_default(params, 'thermostatStrength', 1.0);

@@ -1,0 +1,90 @@
+function summary = analyze_projection_poiseuille_viscosity(out, varargin)
+%ANALYZE_PROJECTION_POISEUILLE_VISCOSITY Fit Poiseuille profile viscosity.
+%
+%   summary = analyze_projection_poiseuille_viscosity(out)
+%
+% Expects output from run_projection_poiseuille_demo. Uses the last half of
+% stored profiles by default, excludes a few wall-adjacent rows, and fits:
+%
+%   Ux(y) = a2*y^2 + a1*y + a0,
+%   nu_eff = -bodyForceX/(2*a2).
+
+if nargin < 1 || ~isstruct(out)
+    error('Usage: summary = analyze_projection_poiseuille_viscosity(out, ...)');
+end
+
+excludeWallCells = 2;
+tMin = [];
+for k = 1:2:numel(varargin)
+    key = lower(string(varargin{k}));
+    val = varargin{k+1};
+    switch key
+        case "excludewallcells"
+            excludeWallCells = val;
+        case "tmin"
+            tMin = val;
+        otherwise
+            error('Unknown option: %s', string(key));
+    end
+end
+
+params = out.params;
+y = out.yCenters(:);
+UxProfiles = out.UxProfiles;
+NProfiles = out.NProfiles;
+t = out.sampleTimes(:);
+
+if isempty(tMin)
+    tMin = t(max(1, floor(numel(t)/2)));
+end
+idx = t >= tMin;
+if nnz(idx) < 1
+    idx = true(size(t));
+end
+
+UxMean = mean(UxProfiles(:, idx), 2, 'omitnan');
+UxStd = std(UxProfiles(:, idx), 0, 2, 'omitnan');
+NMean = mean(NProfiles(:, idx), 2, 'omitnan');
+
+Ny = numel(y);
+fitMask = true(Ny, 1);
+fitMask(1:min(excludeWallCells, Ny)) = false;
+fitMask(max(1, Ny-excludeWallCells+1):Ny) = false;
+fitMask = fitMask & isfinite(UxMean) & isfinite(NMean) & NMean > 0;
+if nnz(fitMask) < 5
+    fitMask = isfinite(UxMean) & isfinite(NMean) & NMean > 0;
+end
+if nnz(fitMask) < 3
+    error('Too few valid y rows for quadratic fit.');
+end
+
+coef = polyfit(y(fitMask), UxMean(fitMask), 2);
+UxFit = polyval(coef, y);
+a2 = coef(1);
+nuEff = -params.bodyForceX / (2*a2);
+res = UxMean(fitMask) - UxFit(fitMask);
+SSres = sum(res.^2);
+SStot = sum((UxMean(fitMask) - mean(UxMean(fitMask))).^2);
+R2 = 1 - SSres / max(SStot, eps);
+
+summary = struct();
+summary.tMin = tMin;
+summary.tMax = max(t(idx));
+summary.nProfiles = nnz(idx);
+summary.excludeWallCells = excludeWallCells;
+summary.a2 = a2;
+summary.a1 = coef(2);
+summary.a0 = coef(3);
+summary.nuEff = nuEff;
+summary.R2 = R2;
+summary.UmaxFit = max(UxFit);
+summary.Umean = mean(UxMean, 'omitnan');
+summary.NMean = mean(NMean, 'omitnan');
+summary.UxMean = UxMean;
+summary.UxStd = UxStd;
+summary.NMeanY = NMean;
+summary.UxFit = UxFit;
+summary.y = y;
+summary.fitMask = fitMask;
+summary.bodyForceX = params.bodyForceX;
+end

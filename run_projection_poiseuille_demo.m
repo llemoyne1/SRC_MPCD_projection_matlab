@@ -52,14 +52,26 @@ for it = 0:params.nSteps
         break;
     end
 
-    [state, stepDiag] = mpcd_step_projection_poiseuille(state, params);
-    actualLastStep = it + 1;
+    nextStep = it + 1;
+    willSample = mod(nextStep, params.sampleEvery) == 0;
+    willProgress = params.progressEvery > 0 && mod(nextStep, params.progressEvery) == 0 && nextStep ~= lastProgressPrint;
+    willBeFinal = nextStep == params.nSteps;
+    stepParams = params;
+    stepParams.computeDiagnostics = params.computeFullDiagnosticsEveryStep || willSample || willProgress || willBeFinal;
 
-    if params.progressEvery > 0 && mod(actualLastStep, params.progressEvery) == 0 && actualLastStep ~= lastProgressPrint
+    [state, stepDiag] = mpcd_step_projection_poiseuille(state, stepParams);
+    actualLastStep = nextStep;
+
+    if willProgress
         lastProgressPrint = actualLastStep;
-        fprintf('  step %d/%d, t=%.6g, elapsed=%.1fs, div red=%.3e, kBTcell=%.3g\n', ...
+        if isfield(stepDiag, 'kBTCellAfterProjection') && isfinite(stepDiag.kBTCellAfterProjection)
+            kBTForPrint = stepDiag.kBTCellAfterProjection;
+        else
+            kBTForPrint = NaN;
+        end
+        fprintf('  step %d/%d, t=%.6g, elapsed=%.1fs, div red=%.3e, kBTcell=%.3g, fullDiag=%d\n', ...
             actualLastStep, params.nSteps, actualLastStep*params.dt, toc(wallClockTic), ...
-            stepDiag.divReductionParticle, stepDiag.kBTCellAfterProjection);
+            stepDiag.divReductionProjected, kBTForPrint, stepParams.computeDiagnostics);
     end
 
     if isfinite(params.maxWallClockSeconds) && toc(wallClockTic) > params.maxWallClockSeconds
@@ -69,12 +81,12 @@ for it = 0:params.nSteps
         stopRequested = true;
     end
 
-    if mod(it + 1, params.sampleEvery) == 0
+    if willSample
         % Fill the row that has just been created on next loop pass. The
         % diagnostic arrays are aligned to sample step after this step.
-        row = floor((it + 1) / params.sampleEvery) + 1;
+        row = floor(nextStep / params.sampleEvery) + 1;
         if row <= nSamples
-            diagHistory(row, :) = [it+1, (it+1)*params.dt, ...
+            diagHistory(row, :) = [nextStep, nextStep*params.dt, ...
                 stepDiag.rmsDivBefore, stepDiag.rmsDivProjectedAfter, stepDiag.rmsDivParticleAfter, ...
                 stepDiag.kBTBeforeProjection, stepDiag.kBTAfterProjection, ...
                 stepDiag.populationBeforeStep.stdN, stepDiag.populationAfterClassic.stdN, stepDiag.populationAfterProjection.stdN, ...
@@ -216,6 +228,7 @@ params = set_default(params, 'projectionStrength', 1.0);
 params = set_default(params, 'projectionInterpolationMethod', 'nearest');
 params = set_default(params, 'projectionTransportDiagnosticsEnable', true);
 params = set_default(params, 'densityTransportDiagnosticsEnable', true);
+params = set_default(params, 'computeFullDiagnosticsEveryStep', false);
 params = set_default(params, 'thermostatAfterProjection', false);
 params = set_default(params, 'thermostatTargetKBT', params.kBT);
 params = set_default(params, 'thermostatStrength', 1.0);

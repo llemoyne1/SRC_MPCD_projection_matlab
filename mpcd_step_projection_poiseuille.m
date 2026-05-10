@@ -17,19 +17,26 @@ projectionInterpolationMethod = char(string(get_param(params, 'projectionInterpo
 projectionTransportDiagnosticsEnable = logical(get_param(params, 'projectionTransportDiagnosticsEnable', true));
 densityTransportDiagnosticsEnable = logical(get_param(params, 'densityTransportDiagnosticsEnable', true));
 thermostatAfterProjection = logical(get_param(params, 'thermostatAfterProjection', false));
+computeDiagnostics = logical(get_param(params, 'computeDiagnostics', true));
 
-popBeforeStep = projection_population_diagnostics(state.x, params, ...
-    'periodicX', true, 'periodicY', false);
+if computeDiagnostics
+    popBeforeStep = projection_population_diagnostics(state.x, params, ...
+        'periodicX', true, 'periodicY', false);
+end
 
 [stateClassic, classicDiag] = mpcd_step_classic_poiseuille(state, params);
 
-popAfterClassic = projection_population_diagnostics(stateClassic.x, params, ...
-    'periodicX', true, 'periodicY', false);
+if computeDiagnostics
+    popAfterClassic = projection_population_diagnostics(stateClassic.x, params, ...
+        'periodicX', true, 'periodicY', false);
+end
 
 Gbefore = projection_deposit_particles_to_grid(stateClassic.x, stateClassic.v, params, ...
     'periodicX', true, 'periodicY', false, 'minCount', 1);
-thermalBeforeProjection = projection_thermal_diagnostics(stateClassic.x, stateClassic.v, params, ...
-    'periodicX', true, 'periodicY', false, 'minCount', 1);
+if computeDiagnostics
+    thermalBeforeProjection = projection_thermal_diagnostics(stateClassic.x, stateClassic.v, params, ...
+        'periodicX', true, 'periodicY', false, 'minCount', 1);
+end
 
 proj = projection_project_grid_periodic_x_neumann_y(Gbefore.Ux, Gbefore.Uy, params);
 
@@ -42,9 +49,10 @@ else
     dv = zeros(size(stateClassic.v));
 end
 
-thermalAfterProjectionRaw = projection_thermal_diagnostics(stateOut.x, stateOut.v, params, ...
-    'periodicX', true, 'periodicY', false, 'minCount', 1);
-stateAfterProjectionRaw = stateOut;
+if computeDiagnostics
+    thermalAfterProjectionRaw = projection_thermal_diagnostics(stateOut.x, stateOut.v, params, ...
+        'periodicX', true, 'periodicY', false, 'minCount', 1);
+end
 
 if thermostatAfterProjection
     [stateOut.v, thermostatInfo] = projection_apply_cell_thermostat(stateOut.x, stateOut.v, params, ...
@@ -52,6 +60,13 @@ if thermostatAfterProjection
 else
     thermostatInfo = empty_thermostat_info();
 end
+
+if ~computeDiagnostics
+    diag = minimal_projection_diag(classicDiag, proj, thermostatInfo, projectionEnable, ...
+        projectionStrength, projectionInterpolationMethod, dv);
+    return;
+end
+
 thermalAfterProjection = projection_thermal_diagnostics(stateOut.x, stateOut.v, params, ...
     'periodicX', true, 'periodicY', false, 'minCount', 1);
 
@@ -86,6 +101,7 @@ diag.wallInfo = classicDiag.wallInfo;
 diag.projectionEnable = projectionEnable;
 diag.projectionStrength = projectionStrength;
 diag.projectionInterpolationMethod = projectionInterpolationMethod;
+diag.computeDiagnostics = computeDiagnostics;
 diag.rmsDivBefore = proj.rmsDivBefore;
 diag.rmsDivProjectedAfter = proj.rmsDivAfter;
 diag.maxAbsDivBefore = proj.maxAbsDivBefore;
@@ -174,6 +190,37 @@ diag.densityTransportMassDeltaProjected = densityTransport.massDeltaProjected;
 diag.densityTransportMassDeltaProjectedMinusClassic = densityTransport.massDeltaProjectedMinusClassic;
 end
 
+
+
+function diag = minimal_projection_diag(classicDiag, proj, thermostatInfo, projectionEnable, projectionStrength, projectionInterpolationMethod, dv)
+% Minimal finite diagnostics for fast steps. Expensive diagnostics such as a
+% second particle-grid projection, thermal diagnostics, and population-transport
+% forecasts are intentionally skipped. run_projection_poiseuille_demo enables
+% full diagnostics only on sampled/progress/final steps.
+diag = struct();
+diag.classic = classicDiag;
+diag.wallInfo = classicDiag.wallInfo;
+diag.projectionEnable = projectionEnable;
+diag.projectionStrength = projectionStrength;
+diag.projectionInterpolationMethod = projectionInterpolationMethod;
+diag.computeDiagnostics = false;
+diag.rmsDivBefore = proj.rmsDivBefore;
+diag.rmsDivProjectedAfter = proj.rmsDivAfter;
+diag.maxAbsDivBefore = proj.maxAbsDivBefore;
+diag.maxAbsDivProjectedAfter = proj.maxAbsDivAfter;
+diag.rmsDivParticleAfter = NaN;
+diag.maxAbsDivParticleAfter = NaN;
+diag.divReductionProjected = proj.rmsDivAfter / max(proj.rmsDivBefore, eps);
+diag.divReductionParticle = NaN;
+diag.meanDivBefore = proj.meanDivBefore;
+diag.dvRms = sqrt(mean(sum(dv.^2, 2)));
+diag.thermostatAfterProjection = thermostatInfo.enabled;
+diag.thermostatInfo = thermostatInfo;
+diag.thermostatRmsVelocityChange = thermostatInfo.rmsVelocityChange;
+diag.thermostatMeanScale = thermostatInfo.meanScale;
+diag.thermostatNCells = thermostatInfo.nThermostattedCells;
+diag.kBTCellAfterProjection = NaN;
+end
 
 function info = empty_thermostat_info()
 % Disabled thermostat = identity operation. Keep all scalar fields finite so

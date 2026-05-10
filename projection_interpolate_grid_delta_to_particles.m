@@ -3,9 +3,19 @@ function dv = projection_interpolate_grid_delta_to_particles(x, dUx, dUy, params
 %
 %   dv = projection_interpolate_grid_delta_to_particles(x, dUx, dUy, params)
 %
-% Bilinear interpolation from cell-centered grid values to particles. This
-% function is intentionally independent from the legacy simulator so it can
-% be tested before coupling the pressure projection to MPCD.
+% Interpolation from cell-centered grid values to particles. This function is
+% intentionally independent from the legacy simulator so it can be tested
+% before coupling the pressure projection to MPCD.
+%
+% Optional name-value arguments:
+%   'periodicX'   default true
+%   'periodicY'   default false
+%   'method'      'bilinear' or 'nearest', default 'bilinear'
+%
+% Grid convention:
+%   dUx and dUy are Nx-by-Ny arrays.
+%   Cell center (ix,iy) is located at:
+%       x = (ix - 0.5) * dx, y = (iy - 0.5) * dy.
 
 if ~isequal(size(dUx), size(dUy))
     error('dUx and dUy must have the same size.');
@@ -14,9 +24,13 @@ end
 if Nx ~= params.Nx || Ny ~= params.Ny
     error('Grid size mismatch: got %dx%d, params has %dx%d.', Nx, Ny, params.Nx, params.Ny);
 end
+if size(x, 2) < 2
+    error('x must be an Np-by-2 array.');
+end
 
 periodicX = true;
 periodicY = false;
+method = "bilinear";
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
     val = varargin{k+1};
@@ -25,6 +39,8 @@ for k = 1:2:numel(varargin)
             periodicX = logical(val);
         case "periodicy"
             periodicY = logical(val);
+        case "method"
+            method = lower(string(val));
         otherwise
             error('Unknown option: %s', string(key));
     end
@@ -48,23 +64,41 @@ else
     yp = min(max(yp, 0), Ly - eps(Ly));
 end
 
-gx = xp / dx + 0.5;
-gy = yp / dy + 0.5;
+switch method
+    case "nearest"
+        ix = floor(xp / dx) + 1;
+        iy = floor(yp / dy) + 1;
+        ix = min(max(ix, 1), Nx);
+        iy = min(max(iy, 1), Ny);
+        ind = sub2ind([Nx, Ny], ix, iy);
+        dv = zeros(size(x, 1), 2);
+        dv(:, 1) = dUx(ind);
+        dv(:, 2) = dUy(ind);
+        return;
 
-ix0 = floor(gx);
-iy0 = floor(gy);
-wx = gx - ix0;
-wy = gy - iy0;
+    case "bilinear"
+        % Continuous 1-based cell-center coordinate. A particle located at
+        % the center of cell 1 has c=1. Values near the left periodic edge
+        % have c<1 and correctly interpolate between cells Nx and 1.
+        cx = xp / dx + 0.5;
+        cy = yp / dy + 0.5;
 
-ix0 = ix0 + 1;
-iy0 = iy0 + 1;
-ix1 = ix0 + 1;
-iy1 = iy0 + 1;
+        ix0 = floor(cx);
+        iy0 = floor(cy);
+        wx = cx - ix0;
+        wy = cy - iy0;
 
-[ix0, wx] = fix_index_weight(ix0, wx, Nx, periodicX);
-[ix1, ~] = fix_index_weight(ix1, wx, Nx, periodicX);
-[iy0, wy] = fix_index_weight(iy0, wy, Ny, periodicY);
-[iy1, ~] = fix_index_weight(iy1, wy, Ny, periodicY);
+        ix1 = ix0 + 1;
+        iy1 = iy0 + 1;
+
+        ix0 = fix_index(ix0, Nx, periodicX);
+        ix1 = fix_index(ix1, Nx, periodicX);
+        iy0 = fix_index(iy0, Ny, periodicY);
+        iy1 = fix_index(iy1, Ny, periodicY);
+
+    otherwise
+        error('Unknown interpolation method: %s', method);
+end
 
 w00 = (1 - wx) .* (1 - wy);
 w10 = wx .* (1 - wy);
@@ -81,14 +115,10 @@ dv(:, 1) = w00.*dUx(ind00) + w10.*dUx(ind10) + w01.*dUx(ind01) + w11.*dUx(ind11)
 dv(:, 2) = w00.*dUy(ind00) + w10.*dUy(ind10) + w01.*dUy(ind01) + w11.*dUy(ind11);
 end
 
-function [idx, w] = fix_index_weight(idx, w, N, periodic)
+function idx = fix_index(idx, N, periodic)
 if periodic
     idx = mod(idx - 1, N) + 1;
 else
-    below = idx < 1;
-    above = idx > N;
-    idx(below) = 1;
-    idx(above) = N;
-    w(below | above) = 0;
+    idx = min(max(idx, 1), N);
 end
 end

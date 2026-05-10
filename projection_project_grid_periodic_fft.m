@@ -58,8 +58,8 @@ end
 
 [Nx, Ny] = size(Ux);
 
-kx1 = (2*pi/Lx) * [0:floor((Nx-1)/2), -ceil((Nx-1)/2):-1];
-ky1 = (2*pi/Ly) * [0:floor((Ny-1)/2), -ceil((Ny-1)/2):-1];
+kx1 = periodic_spectral_wavenumbers(Nx, Lx);
+ky1 = periodic_spectral_wavenumbers(Ny, Ly);
 [KX, KY] = ndgrid(kx1, ky1);
 K2 = KX.^2 + KY.^2;
 
@@ -107,6 +107,23 @@ proj.Lx = Lx;
 proj.Ly = Ly;
 proj.Nx = Nx;
 proj.Ny = Ny;
+end
+
+function k = periodic_spectral_wavenumbers(N, L)
+%PERIODIC_SPECTRAL_WAVENUMBERS FFT wavenumbers for real collocated fields.
+%
+% For even N, the Nyquist mode is self-conjugate. Its spectral derivative is
+% not representable as a real collocated grid field without introducing an
+% imaginary component. We therefore set the Nyquist derivative wavenumber to
+% zero, which is the standard practical convention for real-valued spectral
+% differentiation on even grids. This keeps the projection exactly real and
+% prevents unresolved Nyquist checkerboard components from appearing as a
+% spurious residual divergence in particle-deposited noisy fields.
+if mod(N, 2) == 0
+    k = (2*pi/L) * [0:(N/2-1), 0, (-N/2+1):-1];
+else
+    k = (2*pi/L) * [0:((N-1)/2), -((N-1)/2):-1];
+end
 end
 
 function val = get_param_default(params, name, defaultValue)

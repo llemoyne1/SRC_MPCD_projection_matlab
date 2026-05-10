@@ -1,0 +1,29 @@
+# MATLAB temporary files
+*.asv
+*.m~
+*.autosave
+
+# MATLAB generated folders
+slprj/
+codegen/
+
+# Simulation outputs
+runs/
+results/
+output/
+out_*
+*.bin
+*.mat
+*.fig
+*.png
+*.jpg
+*.avi
+*.mp4
+
+# Local exchange metadata
+COMMIT_REF.txt
+GIT_STATUS.txt
+
+# OS metadata
+.DS_Store
+Thumbs.db

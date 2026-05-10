@@ -1,0 +1,14 @@
+*.m     text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.csv   text eol=lf
+*.kv    text eol=lf
+*.patch text eol=lf
+*.diff  text eol=lf
+
+*.mat   binary
+*.fig   binary
+*.png   binary
+*.jpg   binary
+*.avi   binary
+*.mp4   binary

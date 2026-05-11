@@ -13,6 +13,11 @@ function [stateOut, diag] = mpcd_step_projection_poiseuille(state, params)
 
 projectionEnable = logical(get_param(params, 'projectionEnable', true));
 projectionStrength = get_param(params, 'projectionStrength', 1.0);
+massFluxProjectionMode = char(string(get_param(params, 'massFluxProjectionMode', 'off')));
+massFluxProjectionStrength = get_param(params, 'massFluxProjectionStrength', projectionStrength);
+massFluxDensityRelaxationBeta = get_param(params, 'massFluxDensityRelaxationBeta', 0.0);
+massFluxApplyAfterVelocityProjection = logical(get_param(params, 'massFluxApplyAfterVelocityProjection', false));
+useMassFluxProjection = ~strcmpi(strrep(massFluxProjectionMode, '-', '_'), 'off');
 projectionInterpolationMethod = char(string(get_param(params, 'projectionInterpolationMethod', 'nearest')));
 projectionTransportDiagnosticsEnable = logical(get_param(params, 'projectionTransportDiagnosticsEnable', true));
 densityTransportDiagnosticsEnable = logical(get_param(params, 'densityTransportDiagnosticsEnable', true));
@@ -39,9 +44,52 @@ if computeDiagnostics
 end
 
 proj = projection_project_grid_periodic_x_neumann_y(Gbefore.Ux, Gbefore.Uy, params);
+massFluxProj = empty_mass_flux_projection();
+projectionKind = 'velocity';
+appliedProjectionStrength = projectionStrength;
 
 stateOut = stateClassic;
-if projectionEnable && projectionStrength ~= 0
+if useMassFluxProjection
+    appliedProjectionStrength = massFluxProjectionStrength;
+
+    if massFluxApplyAfterVelocityProjection
+        projectionKind = 'velocity_plus_mass_flux';
+        stateForMassFlux = stateClassic;
+        if projectionEnable && projectionStrength ~= 0
+            dvVelocity = projection_interpolate_grid_delta_to_particles(stateClassic.x, proj.dUx, proj.dUy, params, ...
+                'periodicX', true, 'periodicY', false, 'method', projectionInterpolationMethod);
+            stateForMassFlux.v = stateClassic.v + projectionStrength * dvVelocity;
+        else
+            dvVelocity = zeros(size(stateClassic.v));
+        end
+        GforMassFlux = projection_deposit_particles_to_grid(stateForMassFlux.x, stateForMassFlux.v, params, ...
+            'periodicX', true, 'periodicY', false, 'minCount', 1);
+        massFluxProj = projection_project_mass_flux_periodic_x_neumann_y(GforMassFlux.N, GforMassFlux.Ux, GforMassFlux.Uy, params, ...
+            'mode', massFluxProjectionMode, ...
+            'relaxationBeta', massFluxDensityRelaxationBeta);
+        if projectionEnable && massFluxProjectionStrength ~= 0
+            dvMassFlux = projection_interpolate_grid_delta_to_particles(stateForMassFlux.x, massFluxProj.dUx, massFluxProj.dUy, params, ...
+                'periodicX', true, 'periodicY', false, 'method', projectionInterpolationMethod);
+            stateOut.v = stateForMassFlux.v + massFluxProjectionStrength * dvMassFlux;
+        else
+            dvMassFlux = zeros(size(stateClassic.v));
+            stateOut = stateForMassFlux;
+        end
+        dv = stateOut.v - stateClassic.v;
+    else
+        projectionKind = 'mass_flux';
+        massFluxProj = projection_project_mass_flux_periodic_x_neumann_y(Gbefore.N, Gbefore.Ux, Gbefore.Uy, params, ...
+            'mode', massFluxProjectionMode, ...
+            'relaxationBeta', massFluxDensityRelaxationBeta);
+        if projectionEnable && massFluxProjectionStrength ~= 0
+            dv = projection_interpolate_grid_delta_to_particles(stateClassic.x, massFluxProj.dUx, massFluxProj.dUy, params, ...
+                'periodicX', true, 'periodicY', false, 'method', projectionInterpolationMethod);
+            stateOut.v = stateClassic.v + massFluxProjectionStrength * dv;
+        else
+            dv = zeros(size(stateClassic.v));
+        end
+    end
+elseif projectionEnable && projectionStrength ~= 0
     dv = projection_interpolate_grid_delta_to_particles(stateClassic.x, proj.dUx, proj.dUy, params, ...
         'periodicX', true, 'periodicY', false, 'method', projectionInterpolationMethod);
     stateOut.v = stateClassic.v + projectionStrength * dv;
@@ -62,8 +110,9 @@ else
 end
 
 if ~computeDiagnostics
-    diag = minimal_projection_diag(classicDiag, proj, thermostatInfo, projectionEnable, ...
-        projectionStrength, projectionInterpolationMethod, dv);
+    diag = minimal_projection_diag(classicDiag, proj, massFluxProj, thermostatInfo, projectionEnable, ...
+        projectionStrength, projectionInterpolationMethod, dv, projectionKind, ...
+        massFluxProjectionMode, massFluxProjectionStrength, massFluxDensityRelaxationBeta, appliedProjectionStrength, massFluxApplyAfterVelocityProjection);
     return;
 end
 
@@ -76,6 +125,13 @@ popAfterProjection = projection_population_diagnostics(stateOut.x, params, ...
 Gafter = projection_deposit_particles_to_grid(stateOut.x, stateOut.v, params, ...
     'periodicX', true, 'periodicY', false, 'minCount', 1);
 projAfterParticles = projection_project_grid_periodic_x_neumann_y(Gafter.Ux, Gafter.Uy, params);
+if useMassFluxProjection
+    massFluxAfterParticles = projection_project_mass_flux_periodic_x_neumann_y(Gafter.N, Gafter.Ux, Gafter.Uy, params, ...
+        'mode', massFluxProjectionMode, ...
+        'relaxationBeta', massFluxDensityRelaxationBeta);
+else
+    massFluxAfterParticles = empty_mass_flux_projection();
+end
 
 if densityTransportDiagnosticsEnable
     densityTransport = projection_density_transport_continuous_diagnostics(Gbefore, Gafter, params);
@@ -95,22 +151,49 @@ else
     populationTransport = empty_population_transport_diag();
 end
 
+if useMassFluxProjection
+    appliedRmsDivProjectedAfter = projAfterParticles.rmsDivBefore;
+    appliedMaxAbsDivProjectedAfter = projAfterParticles.maxAbsDivBefore;
+    appliedDivReductionProjected = massFluxProj.divMassReduction;
+else
+    appliedRmsDivProjectedAfter = proj.rmsDivAfter;
+    appliedMaxAbsDivProjectedAfter = proj.maxAbsDivAfter;
+    appliedDivReductionProjected = proj.rmsDivAfter / max(proj.rmsDivBefore, eps);
+end
+
 diag = struct();
 diag.classic = classicDiag;
 diag.wallInfo = classicDiag.wallInfo;
 diag.projectionEnable = projectionEnable;
 diag.projectionStrength = projectionStrength;
+diag.appliedProjectionStrength = appliedProjectionStrength;
+diag.projectionKind = projectionKind;
+diag.massFluxProjectionMode = massFluxProjectionMode;
+diag.massFluxProjectionStrength = massFluxProjectionStrength;
+diag.massFluxDensityRelaxationBeta = massFluxDensityRelaxationBeta;
+diag.massFluxApplyAfterVelocityProjection = massFluxApplyAfterVelocityProjection;
 diag.projectionInterpolationMethod = projectionInterpolationMethod;
 diag.computeDiagnostics = computeDiagnostics;
 diag.rmsDivBefore = proj.rmsDivBefore;
-diag.rmsDivProjectedAfter = proj.rmsDivAfter;
+diag.rmsDivProjectedAfter = appliedRmsDivProjectedAfter;
 diag.maxAbsDivBefore = proj.maxAbsDivBefore;
-diag.maxAbsDivProjectedAfter = proj.maxAbsDivAfter;
+diag.maxAbsDivProjectedAfter = appliedMaxAbsDivProjectedAfter;
 diag.rmsDivParticleAfter = projAfterParticles.rmsDivBefore;
 diag.maxAbsDivParticleAfter = projAfterParticles.maxAbsDivBefore;
-diag.divReductionProjected = proj.rmsDivAfter / max(proj.rmsDivBefore, eps);
+diag.divReductionProjected = appliedDivReductionProjected;
 diag.divReductionParticle = diag.rmsDivParticleAfter / max(proj.rmsDivBefore, eps);
 diag.meanDivBefore = proj.meanDivBefore;
+diag.rmsMassFluxDivBefore = massFluxProj.rmsDivMassBefore;
+diag.rmsMassFluxDivTarget = massFluxProj.rmsTargetDivMass;
+diag.rmsMassFluxDivProjectedAfter = massFluxProj.rmsDivMassAfter;
+diag.rmsMassFluxDivResidual = massFluxProj.rmsDivMassResidual;
+diag.rmsMassFluxDivParticleAfter = massFluxAfterParticles.rmsDivMassBefore;
+diag.maxAbsMassFluxDivBefore = massFluxProj.maxAbsDivMassBefore;
+diag.maxAbsMassFluxDivProjectedAfter = massFluxProj.maxAbsDivMassAfter;
+diag.maxAbsMassFluxDivResidual = massFluxProj.maxAbsDivMassResidual;
+diag.massFluxDivReduction = massFluxProj.divMassReduction;
+diag.massFluxProj = massFluxProj;
+diag.massFluxAfterParticles = massFluxAfterParticles;
 diag.nEmptyCellsBefore = nnz(Gbefore.N(:) == 0);
 diag.nEmptyCellsAfter = nnz(Gafter.N(:) == 0);
 diag.kBTBeforeProjection = estimate_kBT(stateClassic.v);
@@ -192,7 +275,7 @@ end
 
 
 
-function diag = minimal_projection_diag(classicDiag, proj, thermostatInfo, projectionEnable, projectionStrength, projectionInterpolationMethod, dv)
+function diag = minimal_projection_diag(classicDiag, proj, massFluxProj, thermostatInfo, projectionEnable, projectionStrength, projectionInterpolationMethod, dv, projectionKind, massFluxProjectionMode, massFluxProjectionStrength, massFluxDensityRelaxationBeta, appliedProjectionStrength, massFluxApplyAfterVelocityProjection)
 % Minimal finite diagnostics for fast steps. Expensive diagnostics such as a
 % second particle-grid projection, thermal diagnostics, and population-transport
 % forecasts are intentionally skipped. run_projection_poiseuille_demo enables
@@ -202,17 +285,39 @@ diag.classic = classicDiag;
 diag.wallInfo = classicDiag.wallInfo;
 diag.projectionEnable = projectionEnable;
 diag.projectionStrength = projectionStrength;
+diag.appliedProjectionStrength = appliedProjectionStrength;
+diag.projectionKind = projectionKind;
+diag.massFluxProjectionMode = massFluxProjectionMode;
+diag.massFluxProjectionStrength = massFluxProjectionStrength;
+diag.massFluxDensityRelaxationBeta = massFluxDensityRelaxationBeta;
+diag.massFluxApplyAfterVelocityProjection = massFluxApplyAfterVelocityProjection;
 diag.projectionInterpolationMethod = projectionInterpolationMethod;
 diag.computeDiagnostics = false;
 diag.rmsDivBefore = proj.rmsDivBefore;
-diag.rmsDivProjectedAfter = proj.rmsDivAfter;
+if ~isempty(strfind(projectionKind, 'mass_flux'))
+    diag.rmsDivProjectedAfter = NaN;
+    diag.maxAbsDivProjectedAfter = NaN;
+    diag.divReductionProjected = massFluxProj.divMassReduction;
+else
+    diag.rmsDivProjectedAfter = proj.rmsDivAfter;
+    diag.maxAbsDivProjectedAfter = proj.maxAbsDivAfter;
+    diag.divReductionProjected = proj.rmsDivAfter / max(proj.rmsDivBefore, eps);
+end
 diag.maxAbsDivBefore = proj.maxAbsDivBefore;
-diag.maxAbsDivProjectedAfter = proj.maxAbsDivAfter;
 diag.rmsDivParticleAfter = NaN;
 diag.maxAbsDivParticleAfter = NaN;
-diag.divReductionProjected = proj.rmsDivAfter / max(proj.rmsDivBefore, eps);
 diag.divReductionParticle = NaN;
 diag.meanDivBefore = proj.meanDivBefore;
+diag.rmsMassFluxDivBefore = massFluxProj.rmsDivMassBefore;
+diag.rmsMassFluxDivTarget = massFluxProj.rmsTargetDivMass;
+diag.rmsMassFluxDivProjectedAfter = massFluxProj.rmsDivMassAfter;
+diag.rmsMassFluxDivResidual = massFluxProj.rmsDivMassResidual;
+diag.rmsMassFluxDivParticleAfter = NaN;
+diag.maxAbsMassFluxDivBefore = massFluxProj.maxAbsDivMassBefore;
+diag.maxAbsMassFluxDivProjectedAfter = massFluxProj.maxAbsDivMassAfter;
+diag.maxAbsMassFluxDivResidual = massFluxProj.maxAbsDivMassResidual;
+diag.massFluxDivReduction = massFluxProj.divMassReduction;
+diag.massFluxProj = massFluxProj;
 diag.dvRms = sqrt(mean(sum(dv.^2, 2)));
 diag.thermostatAfterProjection = thermostatInfo.enabled;
 diag.thermostatInfo = thermostatInfo;
@@ -220,6 +325,21 @@ diag.thermostatRmsVelocityChange = thermostatInfo.rmsVelocityChange;
 diag.thermostatMeanScale = thermostatInfo.meanScale;
 diag.thermostatNCells = thermostatInfo.nThermostattedCells;
 diag.kBTCellAfterProjection = NaN;
+end
+
+
+function info = empty_mass_flux_projection()
+info = struct();
+info.mode = 'off';
+info.beta = 0.0;
+info.rmsDivMassBefore = NaN;
+info.rmsTargetDivMass = NaN;
+info.rmsDivMassAfter = NaN;
+info.rmsDivMassResidual = NaN;
+info.maxAbsDivMassBefore = NaN;
+info.maxAbsDivMassAfter = NaN;
+info.maxAbsDivMassResidual = NaN;
+info.divMassReduction = NaN;
 end
 
 function info = empty_thermostat_info()

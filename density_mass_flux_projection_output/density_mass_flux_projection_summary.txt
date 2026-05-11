@@ -1,0 +1,22 @@
+Q8 mass-flux projection comparison summary
+==========================================
+
+seed = 11
+Nx = 32
+Ny = 16
+gamma = 20
+nSteps = 10000
+sampleEvery = 100
+initialPopulationMode = exact_per_cell
+massFluxProjectionMode = conservative
+massFluxProjectionStrength = 1
+massFluxDensityRelaxationBeta = 0
+
+meanStd C/P/M = 4.383099970095895 / 3.520045245098856 / 3.630814227299164
+meanStd ratios P/C, M/C, M/P = 0.8030949029487556 / 0.8283667386257969 / 1.031468056370735
+meanLowK C/P/M = 0.001338671558049482 / 9.517400885518801e-05 / 8.050749592093754e-05
+meanRhoTransport C/P/M = 0.07656943316237008 / 0.009222612437523058 / 2.075818713882739e-16
+rhoTransport ratios P/C, M/C, M/P = 0.1204477042159363 / 2.711027923480694e-15 / 2.250792525377167e-14
+nuEff C/P/M = 0.0192941981884843 / 0.02496522450683366 / 0.03083968056989147
+R2 C/P/M = 0.8878132362240694 / 0.9174109685636151 / 0.7495726345595844
+massFluxDiv before/target/after/res M = 44.48635218746912 / 0 / 2.068499364515328e-13 / 2.068499364515328e-13

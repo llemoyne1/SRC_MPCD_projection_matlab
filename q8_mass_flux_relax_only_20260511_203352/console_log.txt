@@ -1,0 +1,287 @@
+diary on
+
+fprintf('\n=== Q8 mass-flux relax-to-uniform only run ===\n');
+
+=== Q8 mass-flux relax-to-uniform only run ===
+
+%% === Reference Q6 projection-only, 10000 steps, seed=11 ===
+% From previous Q6 exact_per_cell 10000-step reference.
+refQ6 = struct();
+refQ6.meanStdN = 3.52005;
+refQ6.finalStdN = 3.46862;
+refQ6.meanOutBandFraction = 0.20034;
+refQ6.meanLowKEnergy = 9.5174e-05;
+refQ6.meanRhoTransport = 0.00922261;
+refQ6.timeAvgRelRms = 0.039353;
+refQ6.nuEff = 2.496522450683e-02;
+refQ6.R2 = 0.917411;
+
+%% === Beta values to test ===
+betaList = [0.01];
+% betaList = [0.01 0.02 0.05];   % use this later if desired
+
+results = table();
+
+for ib = 1:numel(betaList)
+
+    beta = betaList(ib);
+
+    %% === Parameters ===
+    params = struct();
+
+    params.Nx = 32;
+    params.Ny = 16;
+    params.gamma = 20;
+
+    params.nSteps = 10000;
+    params.sampleEvery = 100;
+    params.progressEvery = 1000;
+    params.maxWallClockSeconds = Inf;
+
+    params.bodyForceX = 0.02;
+    params.wallModeY = 'thermalize';
+    params.thermostatAfterProjection = true;
+
+    params.seed = 11;
+    params.initialPopulationMode = 'exact_per_cell';
+
+    % Important: disable velocity projection for pure Q8 comparison
+    params.projectionStrength = 0.0;
+    params.projectedStrength = 0.0;
+
+    % Q8 mass-flux projection
+    params.massFluxProjectionMode = 'relax_to_uniform';
+    params.massFluxProjectionStrength = 1.0;
+    params.massFluxDensityRelaxationBeta = beta;
+
+    % Density diagnostics
+    params.storeDensityMaps = true;
+    params.densityBandFraction = 0.20;
+    params.densityExcludeWallCells = 0;
+    params.lowKMaxIndex = 2;
+
+    % Figures / files
+    params.makeFigures = false;
+    params.saveFigures = false;
+    params.writeSummary = true;
+    params.outputDir = outputDir;
+
+    fprintf('\n=== Q8 relaxed mass-flux run beta = %.6g ===\n', beta);
+
+    %% === Run only mass-flux relaxed case ===
+    tic
+    outM = run_projection_poiseuille_long_demo(params);
+    elapsedScript = toc;
+
+    %% === Density metrics ===
+    metricsM = projection_density_homogeneity_metrics(outM.NMaps, params, ...
+        'sampleTimes', outM.sampleTimes, ...
+        'targetGamma', params.gamma, ...
+        'bandFraction', params.densityBandFraction, ...
+        'excludeWallCells', params.densityExcludeWallCells, ...
+        'lowKMaxIndex', params.lowKMaxIndex);
+
+    %% === Summary row ===
+    row = table();
+
+    row.seed = params.seed;
+    row.nSteps = params.nSteps;
+    row.Nx = params.Nx;
+    row.Ny = params.Ny;
+    row.gamma = params.gamma;
+
+    row.massFluxMode = string(params.massFluxProjectionMode);
+    row.massFluxStrength = params.massFluxProjectionStrength;
+    row.beta = params.massFluxDensityRelaxationBeta;
+
+    row.meanStdN = metricsM.summary.meanStdN;
+    row.ratioStd_vs_Q6Projection = metricsM.summary.meanStdN / refQ6.meanStdN;
+
+    row.finalStdN = metricsM.summary.finalStdN;
+    row.ratioFinalStd_vs_Q6Projection = metricsM.summary.finalStdN / refQ6.finalStdN;
+
+    row.meanOutBand = metricsM.summary.meanOutBandFraction;
+    row.ratioOutBand_vs_Q6Projection = metricsM.summary.meanOutBandFraction / refQ6.meanOutBandFraction;
+
+    row.meanLowK = metricsM.summary.meanLowKEnergy;
+    row.ratioLowK_vs_Q6Projection = metricsM.summary.meanLowKEnergy / refQ6.meanLowKEnergy;
+
+    row.timeAvgRelRms = metricsM.summary.timeAvgRelRms;
+    row.ratioTimeAvgRelRms_vs_Q6Projection = metricsM.summary.timeAvgRelRms / refQ6.timeAvgRelRms;
+
+    row.meanRhoTransport = outM.summary.meanDensityTransportProjectedRms;
+    row.ratioRhoTransport_vs_Q6Projection = ...
+        outM.summary.meanDensityTransportProjectedRms / refQ6.meanRhoTransport;
+
+    row.nuEff = outM.viscosity.nuEff;
+    row.ratioNuEff_vs_Q6Projection = outM.viscosity.nuEff / refQ6.nuEff;
+    row.R2 = outM.viscosity.R2;
+    row.signalToNoise = outM.viscosity.signalToNoise;
+    row.centerMinusWall = outM.viscosity.centerMinusWall;
+
+    % Mass-flux diagnostics: these fields are expected in Q8.
+    row.meanMassFluxDivBefore = getfield_or_nan(outM.summary, 'meanMassFluxDivBeforeRms');
+    row.meanMassFluxDivTarget = getfield_or_nan(outM.summary, 'meanMassFluxDivTargetRms');
+    row.meanMassFluxDivAfter = getfield_or_nan(outM.summary, 'meanMassFluxDivAfterRms');
+    row.meanMassFluxResidual = getfield_or_nan(outM.summary, 'meanMassFluxDivResidualRms');
+
+    row.elapsedRun = outM.elapsedWallClock;
+    row.elapsedScript = elapsedScript;
+
+    results = [results; row]; %#ok<AGROW>
+
+    disp(row)
+
+    %% === Save individual run ===
+    betaTag = strrep(sprintf('%.6g', beta), '.', 'p');
+    matFile = fullfile(outputDir, ['q8_mass_flux_relax_beta_' betaTag '.mat']);
+    save(matFile, 'params', 'outM', 'metricsM', 'row', 'refQ6', '-v7.3');
+
+end
+
+=== Q8 relaxed mass-flux run beta = 0.01 ===
+  step 1000/10000, t=1, elapsed=16.8s, div red=2.839e-05, kBTcell=1.05, fullDiag=1
+  step 2000/10000, t=2, elapsed=31.7s, div red=5.413e-05, kBTcell=1.07, fullDiag=1
+  step 3000/10000, t=3, elapsed=45.4s, div red=3.573e-05, kBTcell=1.06, fullDiag=1
+  step 4000/10000, t=4, elapsed=59.1s, div red=7.927e-05, kBTcell=1.2, fullDiag=1
+  step 5000/10000, t=5, elapsed=76.4s, div red=7.056e-06, kBTcell=1.06, fullDiag=1
+  step 6000/10000, t=6, elapsed=95.1s, div red=5.836e-05, kBTcell=1.06, fullDiag=1
+  step 7000/10000, t=7, elapsed=114.7s, div red=4.136e-05, kBTcell=1.06, fullDiag=1
+  step 8000/10000, t=8, elapsed=133.7s, div red=8.991e-06, kBTcell=1.06, fullDiag=1
+  step 9000/10000, t=9, elapsed=153.1s, div red=9.809e-06, kBTcell=1.08, fullDiag=1
+  step 10000/10000, t=10, elapsed=173.0s, div red=7.893e-05, kBTcell=1.23, fullDiag=1
+
+=== run_projection_poiseuille_demo ===
+Np                         : 10240
+initialPopulationMode      : exact_per_cell
+initial std(N), outband20  : 0 / 0
+grid                       : 32 x 16
+steps completed            : 10000 / 10000 in 172.99 s
+wallModeY                  : thermalize
+projectionStrength         : 0
+massFluxProjectionMode     : relax_to_uniform  strength=1  beta=0.01
+last rms div before        : 4.398133647614e+00
+last rms div projected     : 3.673843098361e+00
+last rms div particle grid : 3.673843098361e+00
+last kBT after projection  : 1.106466227463e+00
+last kBT cell raw/final    : 1.241768790981e+00 / 1.231651701880e+00
+thermostat enabled         : 1
+thermostat mean scale      : 0.998667
+last pop std classic/proj  : 5.07285 / 5.07285
+max pop delta projection   : 0
+forecast pop rms classic/proj/diff : 1.14564 / 1.21353 / 0.484123
+forecast pop std classic/proj      : 5.1323 / 5.15057
+continuous rho rms classic/proj/diff: 0.0744791 / 0.0478122 / 0.0765923
+mass flux div before/target/after/res : 74.4791 / 47.8122 / 47.8122 / 0.0058788
+nu_eff fit                 : 1.770098054062e-02
+fit R2                     : 0.844984
+
+=== physical Poiseuille checks ===
+fit window t              : [5, 10]
+curvature a2              : -5.649404549682e-01
+curvature sign ok         : 1
+center minus wall U       : 9.452120929299e-02
+profile noise rms         : 3.886533141777e-02
+signal/noise estimate     : 2.43202
+physical candidate        : 1
+mean cell kBT after       : 1.082648818970e+00
+mean rho transport classic/projected/diff: 0.052272 / 0.0278246 / 0.0524571
+mean mass-flux div before/target/after/res: 52.272 / 27.8296 / 27.8296 / 0.00253913
+{Unrecognized function or variable 'getfield_or_nan'.
+} 
+
+    % Mass-flux diagnostics: these fields are expected in Q8.
+if isfield(outM.summary, 'meanMassFluxDivBeforeRms')
+    row.meanMassFluxDivBefore = outM.summary.meanMassFluxDivBeforeRms;
+else
+    row.meanMassFluxDivBefore = NaN;
+end
+
+if isfield(outM.summary, 'meanMassFluxDivTargetRms')
+    row.meanMassFluxDivTarget = outM.summary.meanMassFluxDivTargetRms;
+else
+    row.meanMassFluxDivTarget = NaN;
+end
+
+if isfield(outM.summary, 'meanMassFluxDivAfterRms')
+    row.meanMassFluxDivAfter = outM.summary.meanMassFluxDivAfterRms;
+else
+    row.meanMassFluxDivAfter = NaN;
+end
+
+if isfield(outM.summary, 'meanMassFluxDivResidualRms')
+    row.meanMassFluxResidual = outM.summary.meanMassFluxDivResidualRms;
+else
+    row.meanMassFluxResidual = NaN;
+end
+    row.elapsedRun = outM.elapsedWallClock;
+    row.elapsedScript = elapsedScript;
+
+    results = [results; row]; %#ok<AGROW>
+
+    disp(row)
+    <strong>seed</strong>    <strong>nSteps</strong>    <strong>Nx</strong>    <strong>Ny</strong>    <strong>gamma</strong>       <strong>massFluxMode</strong>       <strong>massFluxStrength</strong>    <strong>beta</strong>    <strong>meanStdN</strong>    <strong>ratioStd_vs_Q6Projection</strong>    <strong>finalStdN</strong>    <strong>ratioFinalStd_vs_Q6Projection</strong>    <strong>meanOutBand</strong>    <strong>ratioOutBand_vs_Q6Projection</strong>     <strong>meanLowK</strong>     <strong>ratioLowK_vs_Q6Projection</strong>    <strong>timeAvgRelRms</strong>    <strong>ratioTimeAvgRelRms_vs_Q6Projection</strong>    <strong>meanRhoTransport</strong>    <strong>ratioRhoTransport_vs_Q6Projection</strong>     <strong>nuEff</strong>      <strong>ratioNuEff_vs_Q6Projection</strong>      <strong>R2</strong>       <strong>signalToNoise</strong>    <strong>centerMinusWall</strong>    <strong>meanMassFluxDivBefore</strong>    <strong>meanMassFluxDivTarget</strong>    <strong>meanMassFluxDivAfter</strong>    <strong>meanMassFluxResidual</strong>    <strong>elapsedRun</strong>    <strong>elapsedScript</strong>
+    <strong>____</strong>    <strong>______</strong>    <strong>__</strong>    <strong>__</strong>    <strong>_____</strong>    <strong>__________________</strong>    <strong>________________</strong>    <strong>____</strong>    <strong>________</strong>    <strong>________________________</strong>    <strong>_________</strong>    <strong>_____________________________</strong>    <strong>___________</strong>    <strong>____________________________</strong>    <strong>__________</strong>    <strong>_________________________</strong>    <strong>_____________</strong>    <strong>__________________________________</strong>    <strong>________________</strong>    <strong>_________________________________</strong>    <strong>________</strong>    <strong>__________________________</strong>    <strong>_______</strong>    <strong>_____________</strong>    <strong>_______________</strong>    <strong>_____________________</strong>    <strong>_____________________</strong>    <strong>____________________</strong>    <strong>____________________</strong>    <strong>__________</strong>    <strong>_____________</strong>
+
+     11     10000     32    16     20      "relax_to_uniform"           1            0.01     2.8303             0.80405              5.0729                 1.4625                  0.10481                0.52317               6.6891e-05             0.70283               0.013654                    0.34697                      0.027825                      3.017                  0.017701             0.70903              0.84498        2.432           0.094521                 NaN                      NaN                     NaN                     NaN               172.99         173.12    
+
+
+    %% === Save individual run ===
+    betaTag = strrep(sprintf('%.6g', beta), '.', 'p');
+    matFile = fullfile(outputDir, ['q8_mass_flux_relax_beta_' betaTag '.mat']);
+    save(matFile, 'params', 'outM', 'metricsM', 'row', 'refQ6', '-v7.3');
+%% === Save global summary ===
+csvFile = fullfile(outputDir, 'q8_mass_flux_relax_only_summary.csv');
+txtFile = fullfile(outputDir, 'q8_mass_flux_relax_only_summary.txt');
+
+writetable(results, csvFile);
+
+fid = fopen(txtFile, 'w');
+
+fprintf(fid, '=== Q8 mass-flux relax-to-uniform summary ===\n');
+fprintf(fid, 'Reference: Q6 projection-only, 10000 steps, exact_per_cell, seed=11\n\n');
+
+for i = 1:height(results)
+    fprintf(fid, '--- beta = %.6g ---\n', results.beta(i));
+    fprintf(fid, 'mean std(N)                  : %.12g   ratio vs Q6 P = %.6g\n', ...
+        results.meanStdN(i), results.ratioStd_vs_Q6Projection(i));
+    fprintf(fid, 'final std(N)                 : %.12g   ratio vs Q6 P = %.6g\n', ...
+        results.finalStdN(i), results.ratioFinalStd_vs_Q6Projection(i));
+    fprintf(fid, 'mean out-band                : %.12g   ratio vs Q6 P = %.6g\n', ...
+        results.meanOutBand(i), results.ratioOutBand_vs_Q6Projection(i));
+    fprintf(fid, 'mean low-k energy            : %.12g   ratio vs Q6 P = %.6g\n', ...
+        results.meanLowK(i), results.ratioLowK_vs_Q6Projection(i));
+    fprintf(fid, 'time-avg rel RMS             : %.12g   ratio vs Q6 P = %.6g\n', ...
+        results.timeAvgRelRms(i), results.ratioTimeAvgRelRms_vs_Q6Projection(i));
+    fprintf(fid, 'mean rho transport           : %.12g   ratio vs Q6 P = %.6g\n', ...
+        results.meanRhoTransport(i), results.ratioRhoTransport_vs_Q6Projection(i));
+
+    fprintf(fid, '\nHydrodynamics:\n');
+    fprintf(fid, 'nu_eff                       : %.12g   ratio vs Q6 P = %.6g\n', ...
+        results.nuEff(i), results.ratioNuEff_vs_Q6Projection(i));
+    fprintf(fid, 'R2                           : %.12g\n', results.R2(i));
+    fprintf(fid, 'signal/noise                 : %.12g\n', results.signalToNoise(i));
+    fprintf(fid, 'center minus wall U          : %.12g\n', results.centerMinusWall(i));
+
+    fprintf(fid, '\nMass-flux diagnostics:\n');
+    fprintf(fid, 'mean div(Nu) before          : %.12g\n', results.meanMassFluxDivBefore(i));
+    fprintf(fid, 'mean div(Nu) target          : %.12g\n', results.meanMassFluxDivTarget(i));
+    fprintf(fid, 'mean div(Nu) after           : %.12g\n', results.meanMassFluxDivAfter(i));
+    fprintf(fid, 'mean residual                : %.12g\n', results.meanMassFluxResidual(i));
+
+    fprintf(fid, '\nTiming:\n');
+    fprintf(fid, 'elapsed run [s]              : %.3f\n', results.elapsedRun(i));
+    fprintf(fid, '\n');
+end
+
+fclose(fid);
+
+fprintf('\nSummary written to:\n%s\n', txtFile);
+
+Summary written to:
+q8_mass_flux_relax_only_20260511_203352\q8_mass_flux_relax_only_summary.txt
+fprintf('CSV written to:\n%s\n', csvFile);
+CSV written to:
+q8_mass_flux_relax_only_20260511_203352\q8_mass_flux_relax_only_summary.csv
+
+diary off

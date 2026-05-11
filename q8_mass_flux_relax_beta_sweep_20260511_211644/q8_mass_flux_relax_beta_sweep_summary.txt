@@ -1,0 +1,65 @@
+=== Q8 mass-flux relax-to-uniform beta sweep summary ===
+Reference: Q6 projection-only, 10000 steps, exact_per_cell, seed=11
+
+============================================================
+beta = 0.002
+============================================================
+
+--- Density metrics ---
+mean std(N) : 3.0522261571 ratio vs Q6 P = 0.867097
+final std(N) : 3.57858383036 ratio vs Q6 P = 1.0317
+mean out-band : 0.140141553218 ratio vs Q6 P = 0.699519
+mean low-k energy : 3.97821401436e-05 ratio vs Q6 P = 0.417994
+time-avg rel RMS : 0.0239239627997 ratio vs Q6 P = 0.607932
+mean rho transport : 0.00612486954011 ratio vs Q6 P = 0.664115
+
+--- Hydrodynamics ---
+nu_eff : 0.0193361575552 ratio vs Q6 P = 0.774524
+R2 : 0.903256595451
+signal/noise : 3.16082900637
+center minus wall U : 0.107131212515
+mean cell kBT after : NaN
+last rms div particle grid : NaN
+
+--- Mass-flux diagnostics ---
+mean div(Nu) before : 45.5727912037
+mean div(Nu) target : 6.12486945793
+mean div(Nu) after : 6.12486954011
+mean residual : 0.000264427770122
+relative residual : 5.80231675826e-06
+
+--- Timing ---
+elapsed run [s] : 180.661
+elapsed script [s] : 180.808
+
+============================================================
+beta = 0.005
+============================================================
+
+--- Density metrics ---
+mean std(N) : 2.91164236681 ratio vs Q6 P = 0.827159
+final std(N) : 3.26758377371 ratio vs Q6 P = 0.942041
+mean out-band : 0.118483137376 ratio vs Q6 P = 0.59141
+mean low-k energy : 4.79571229143e-05 ratio vs Q6 P = 0.503889
+time-avg rel RMS : 0.0166646912786 ratio vs Q6 P = 0.423467
+mean rho transport : 0.0145274521449 ratio vs Q6 P = 1.5752
+
+--- Hydrodynamics ---
+nu_eff : 0.0308688848115 ratio vs Q6 P = 1.23648
+R2 : 0.56933452604
+signal/noise : 2.54985004271
+center minus wall U : 0.0946420878747
+mean cell kBT after : NaN
+last rms div particle grid : NaN
+
+--- Mass-flux diagnostics ---
+mean div(Nu) before : 47.5001725165
+mean div(Nu) target : 14.5274521245
+mean div(Nu) after : 14.5274521449
+mean residual : 0.000914752029616
+relative residual : 1.92578675225e-05
+
+--- Timing ---
+elapsed run [s] : 163.139
+elapsed script [s] : 163.160
+

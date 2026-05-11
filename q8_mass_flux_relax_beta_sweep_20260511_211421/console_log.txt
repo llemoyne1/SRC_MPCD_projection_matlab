@@ -1,0 +1,9 @@
+{Error using <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('diary')" style="font-weight:bold">diary</a>
+Too many input arguments.
+
+Error in <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run', 'E:\GitHub\SRC_MPCD_projection_matlab\run.m', 8)" style="font-weight:bold">run</a> (<a href="matlab: opentoline('E:\GitHub\SRC_MPCD_projection_matlab\run.m',8,0)">line 8</a>)
+diary on fprintf('\n=== Q8 mass-flux relax-to-uniform beta sweep ===\n');
+^^^^^
+} 
+opentoline('E:\GitHub\SRC_MPCD_projection_matlab\run.m',8,0)
+run

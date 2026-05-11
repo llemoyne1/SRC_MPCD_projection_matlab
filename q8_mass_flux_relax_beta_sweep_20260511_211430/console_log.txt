@@ -1,0 +1,19 @@
+
+=== Q8 mass-flux relax-to-uniform beta sweep ===
+{Not enough input arguments.
+
+Error in <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('beta', 'C:\Program Files\MATLAB\R2024b\toolbox\matlab\specfun\beta.m', 19)" style="font-weight:bold">beta</a> (<a href="matlab: opentoline('C:\Program Files\MATLAB\R2024b\toolbox\matlab\specfun\beta.m',19,0)">line 19</a>)
+y = exp(betaln(z,w));
+               ^
+Error in <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run', 'E:\GitHub\SRC_MPCD_projection_matlab\run.m', 14)" style="font-weight:bold">run</a> (<a href="matlab: opentoline('E:\GitHub\SRC_MPCD_projection_matlab\run.m',14,0)">line 14</a>)
+params.massFluxProjectionMode = 'relax_to_uniform'; params.massFluxProjectionStrength = 1.0; params.massFluxDensityRelaxationBeta = beta; % Density diagnostics.
+                                                                                                                                    ^^^^
+} 
+opentoline('C:\Program Files\MATLAB\R2024b\toolbox\matlab\specfun\beta.m',19,0)
+opentoline('E:\GitHub\SRC_MPCD_projection_matlab\run.m',14,0)
+run
+{Error: <a href="matlab: opentoline('E:\GitHub\SRC_MPCD_projection_matlab\run.m',13,46)">File: run.m Line: 13 Column: 46</a>
+At least one END is missing. The statement beginning here does not have a matching end.
+} 
+opentoline('E:\GitHub\SRC_MPCD_projection_matlab\run.m',13,46)
+run

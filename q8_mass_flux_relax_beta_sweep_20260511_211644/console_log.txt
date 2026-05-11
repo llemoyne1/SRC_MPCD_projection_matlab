@@ -1,0 +1,119 @@
+
+=== Q8 mass-flux relax-to-uniform beta sweep ===
+
+============================================================
+=== Q8 relaxed mass-flux run beta = 0.002 ===
+============================================================
+  step 1000/10000, t=1, elapsed=15.1s, div red=3.401e-06, kBTcell=1.04, fullDiag=1
+  step 2000/10000, t=2, elapsed=33.3s, div red=4.266e-06, kBTcell=1.04, fullDiag=1
+  step 3000/10000, t=3, elapsed=52.0s, div red=1.417e-05, kBTcell=1.03, fullDiag=1
+  step 4000/10000, t=4, elapsed=70.6s, div red=8.774e-06, kBTcell=1.04, fullDiag=1
+  step 5000/10000, t=5, elapsed=88.9s, div red=1.170e-05, kBTcell=1.04, fullDiag=1
+  step 6000/10000, t=6, elapsed=107.8s, div red=4.440e-06, kBTcell=1.04, fullDiag=1
+  step 7000/10000, t=7, elapsed=126.3s, div red=7.641e-07, kBTcell=1.04, fullDiag=1
+  step 8000/10000, t=8, elapsed=144.8s, div red=6.968e-06, kBTcell=1.04, fullDiag=1
+  step 9000/10000, t=9, elapsed=163.6s, div red=2.372e-06, kBTcell=1.05, fullDiag=1
+  step 10000/10000, t=10, elapsed=180.7s, div red=3.441e-06, kBTcell=1.04, fullDiag=1
+
+=== run_projection_poiseuille_demo ===
+Np                         : 10240
+initialPopulationMode      : exact_per_cell
+initial std(N), outband20  : 0 / 0
+grid                       : 32 x 16
+steps completed            : 10000 / 10000 in 180.66 s
+wallModeY                  : thermalize
+projectionStrength         : 0
+massFluxProjectionMode     : relax_to_uniform  strength=1  beta=0.002
+last rms div before        : 2.658979775757e+00
+last rms div projected     : 6.353876300901e-01
+last rms div particle grid : 6.353876300901e-01
+last kBT after projection  : 1.021324651206e+00
+last kBT cell raw/final    : 1.033096592852e+00 / 1.042433930636e+00
+thermostat enabled         : 1
+thermostat mean scale      : 1.00594
+last pop std classic/proj  : 3.57858 / 3.57858
+max pop delta projection   : 0
+forecast pop rms classic/proj/diff : 1.00972 / 0.994123 / 0.385276
+forecast pop std classic/proj      : 3.59822 / 3.60202
+continuous rho rms classic/proj/diff: 0.051109 / 0.0071345 / 0.051323
+mass flux div before/target/after/res : 51.109 / 7.1345 / 7.1345 / 0.000175856
+nu_eff fit                 : 1.933615755519e-02
+fit R2                     : 0.903257
+
+=== physical Poiseuille checks ===
+fit window t              : [5, 10]
+curvature a2              : -5.171658314976e-01
+curvature sign ok         : 1
+center minus wall U       : 1.071312125149e-01
+profile noise rms         : 3.389339072096e-02
+signal/noise estimate     : 3.16083
+physical candidate        : 1
+mean cell kBT after       : 1.038559156325e+00
+mean rho transport classic/projected/diff: 0.0455728 / 0.00612487 / 0.0455948
+mean mass-flux div before/target/after/res: 45.5728 / 6.12487 / 6.12487 / 0.000264428
+    <strong>seed</strong>    <strong>nSteps</strong>    <strong>Nx</strong>    <strong>Ny</strong>    <strong>gamma</strong>       <strong>massFluxMode</strong>       <strong>massFluxStrength</strong>    <strong>beta</strong>     <strong>meanStdN</strong>    <strong>ratioStd_vs_Q6Projection</strong>    <strong>finalStdN</strong>    <strong>ratioFinalStd_vs_Q6Projection</strong>    <strong>meanOutBand</strong>    <strong>ratioOutBand_vs_Q6Projection</strong>     <strong>meanLowK</strong>     <strong>ratioLowK_vs_Q6Projection</strong>    <strong>timeAvgRelRms</strong>    <strong>ratioTimeAvgRelRms_vs_Q6Projection</strong>    <strong>meanRhoTransport</strong>    <strong>ratioRhoTransport_vs_Q6Projection</strong>     <strong>nuEff</strong>      <strong>ratioNuEff_vs_Q6Projection</strong>      <strong>R2</strong>       <strong>signalToNoise</strong>    <strong>centerMinusWall</strong>    <strong>meanMassFluxDivBefore</strong>    <strong>meanMassFluxDivTarget</strong>    <strong>meanMassFluxDivAfter</strong>    <strong>meanMassFluxResidual</strong>    <strong>massFluxResidualRelative</strong>    <strong>meanCellKBTAfter</strong>    <strong>lastRmsDivParticleGrid</strong>    <strong>elapsedRun</strong>    <strong>elapsedScript</strong>
+    <strong>____</strong>    <strong>______</strong>    <strong>__</strong>    <strong>__</strong>    <strong>_____</strong>    <strong>__________________</strong>    <strong>________________</strong>    <strong>_____</strong>    <strong>________</strong>    <strong>________________________</strong>    <strong>_________</strong>    <strong>_____________________________</strong>    <strong>___________</strong>    <strong>____________________________</strong>    <strong>__________</strong>    <strong>_________________________</strong>    <strong>_____________</strong>    <strong>__________________________________</strong>    <strong>________________</strong>    <strong>_________________________________</strong>    <strong>________</strong>    <strong>__________________________</strong>    <strong>_______</strong>    <strong>_____________</strong>    <strong>_______________</strong>    <strong>_____________________</strong>    <strong>_____________________</strong>    <strong>____________________</strong>    <strong>____________________</strong>    <strong>________________________</strong>    <strong>________________</strong>    <strong>______________________</strong>    <strong>__________</strong>    <strong>_____________</strong>
+
+     11     10000     32    16     20      "relax_to_uniform"           1            0.002     3.0522              0.8671              3.5786                 1.0317                  0.14014                0.69952               3.9782e-05             0.41799               0.023924                    0.60793                     0.0061249                     0.66411                 0.019336             0.77452              0.90326       3.1608            0.10713               45.573                   6.1249                   6.1249                0.00026443                5.8023e-06                 NaN                    NaN                180.66         180.81    
+
+
+============================================================
+=== Q8 relaxed mass-flux run beta = 0.005 ===
+============================================================
+  step 1000/10000, t=1, elapsed=13.1s, div red=1.055e-05, kBTcell=1.04, fullDiag=1
+  step 2000/10000, t=2, elapsed=26.4s, div red=1.060e-05, kBTcell=1.04, fullDiag=1
+  step 3000/10000, t=3, elapsed=39.9s, div red=9.016e-06, kBTcell=1.04, fullDiag=1
+  step 4000/10000, t=4, elapsed=53.6s, div red=2.371e-05, kBTcell=1.04, fullDiag=1
+  step 5000/10000, t=5, elapsed=67.4s, div red=3.026e-05, kBTcell=1.04, fullDiag=1
+  step 6000/10000, t=6, elapsed=85.7s, div red=1.161e-05, kBTcell=1.05, fullDiag=1
+  step 7000/10000, t=7, elapsed=104.8s, div red=8.080e-06, kBTcell=1.07, fullDiag=1
+  step 8000/10000, t=8, elapsed=124.1s, div red=1.932e-05, kBTcell=1.06, fullDiag=1
+  step 9000/10000, t=9, elapsed=143.9s, div red=1.454e-05, kBTcell=1.06, fullDiag=1
+  step 10000/10000, t=10, elapsed=163.1s, div red=1.137e-05, kBTcell=1.05, fullDiag=1
+
+=== run_projection_poiseuille_demo ===
+Np                         : 10240
+initialPopulationMode      : exact_per_cell
+initial std(N), outband20  : 0 / 0
+grid                       : 32 x 16
+steps completed            : 10000 / 10000 in 163.14 s
+wallModeY                  : thermalize
+projectionStrength         : 0
+massFluxProjectionMode     : relax_to_uniform  strength=1  beta=0.005
+last rms div before        : 2.492434665156e+00
+last rms div projected     : 9.450908466456e-01
+last rms div particle grid : 9.450908466456e-01
+last kBT after projection  : 1.025515423925e+00
+last kBT cell raw/final    : 1.041285043741e+00 / 1.049503611711e+00
+thermostat enabled         : 1
+thermostat mean scale      : 1.00625
+last pop std classic/proj  : 3.26758 / 3.26758
+max pop delta projection   : 0
+forecast pop rms classic/proj/diff : 1.06434 / 1.11278 / 0.306186
+forecast pop std classic/proj      : 3.13493 / 3.11991
+continuous rho rms classic/proj/diff: 0.0479416 / 0.0160993 / 0.0493121
+mass flux div before/target/after/res : 47.9416 / 16.0993 / 16.0993 / 0.000545078
+nu_eff fit                 : 3.086888481147e-02
+fit R2                     : 0.569335
+
+=== physical Poiseuille checks ===
+fit window t              : [5, 10]
+curvature a2              : -3.239508022747e-01
+curvature sign ok         : 1
+center minus wall U       : 9.464208787472e-02
+profile noise rms         : 3.711672697986e-02
+signal/noise estimate     : 2.54985
+physical candidate        : 1
+mean cell kBT after       : 1.047762715415e+00
+mean rho transport classic/projected/diff: 0.0475002 / 0.0145275 / 0.0477967
+mean mass-flux div before/target/after/res: 47.5002 / 14.5275 / 14.5275 / 0.000914752
+    <strong>seed</strong>    <strong>nSteps</strong>    <strong>Nx</strong>    <strong>Ny</strong>    <strong>gamma</strong>       <strong>massFluxMode</strong>       <strong>massFluxStrength</strong>    <strong>beta</strong>     <strong>meanStdN</strong>    <strong>ratioStd_vs_Q6Projection</strong>    <strong>finalStdN</strong>    <strong>ratioFinalStd_vs_Q6Projection</strong>    <strong>meanOutBand</strong>    <strong>ratioOutBand_vs_Q6Projection</strong>     <strong>meanLowK</strong>     <strong>ratioLowK_vs_Q6Projection</strong>    <strong>timeAvgRelRms</strong>    <strong>ratioTimeAvgRelRms_vs_Q6Projection</strong>    <strong>meanRhoTransport</strong>    <strong>ratioRhoTransport_vs_Q6Projection</strong>     <strong>nuEff</strong>      <strong>ratioNuEff_vs_Q6Projection</strong>      <strong>R2</strong>       <strong>signalToNoise</strong>    <strong>centerMinusWall</strong>    <strong>meanMassFluxDivBefore</strong>    <strong>meanMassFluxDivTarget</strong>    <strong>meanMassFluxDivAfter</strong>    <strong>meanMassFluxResidual</strong>    <strong>massFluxResidualRelative</strong>    <strong>meanCellKBTAfter</strong>    <strong>lastRmsDivParticleGrid</strong>    <strong>elapsedRun</strong>    <strong>elapsedScript</strong>
+    <strong>____</strong>    <strong>______</strong>    <strong>__</strong>    <strong>__</strong>    <strong>_____</strong>    <strong>__________________</strong>    <strong>________________</strong>    <strong>_____</strong>    <strong>________</strong>    <strong>________________________</strong>    <strong>_________</strong>    <strong>_____________________________</strong>    <strong>___________</strong>    <strong>____________________________</strong>    <strong>__________</strong>    <strong>_________________________</strong>    <strong>_____________</strong>    <strong>__________________________________</strong>    <strong>________________</strong>    <strong>_________________________________</strong>    <strong>________</strong>    <strong>__________________________</strong>    <strong>_______</strong>    <strong>_____________</strong>    <strong>_______________</strong>    <strong>_____________________</strong>    <strong>_____________________</strong>    <strong>____________________</strong>    <strong>____________________</strong>    <strong>________________________</strong>    <strong>________________</strong>    <strong>______________________</strong>    <strong>__________</strong>    <strong>_____________</strong>
+
+     11     10000     32    16     20      "relax_to_uniform"           1            0.005     2.9116             0.82716              3.2676                 0.94204                 0.11848                0.59141               4.7957e-05             0.50389               0.016665                    0.42347                      0.014527                     1.5752                  0.030869              1.2365              0.56933       2.5499           0.094642                47.5                    14.527                   14.527                0.00091475                1.9258e-05                 NaN                    NaN                163.14         163.16    
+
+
+Summary written to:
+q8_mass_flux_relax_beta_sweep_20260511_211644\q8_mass_flux_relax_beta_sweep_summary.txt
+CSV written to:
+q8_mass_flux_relax_beta_sweep_20260511_211644\q8_mass_flux_relax_beta_sweep_summary.csv

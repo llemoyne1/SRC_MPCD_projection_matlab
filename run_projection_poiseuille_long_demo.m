@@ -26,6 +26,14 @@ params = set_default(params, 'nSteps', 2500);
 params = set_default(params, 'sampleEvery', 25);
 params = set_default(params, 'projectionEnable', true);
 params = set_default(params, 'projectionStrength', 1.0);
+params = set_default(params, 'massFluxProjectionMode', 'off');
+params = set_default(params, 'massFluxProjectionStrength', params.projectionStrength);
+params = set_default(params, 'massFluxDensityRelaxationBeta', 0.0);
+params = set_default(params, 'massFluxApplyAfterVelocityProjection', false);
+params = set_default(params, 'massFluxTargetFilter', 'none');
+params = set_default(params, 'massFluxLowKMaxIndex', 2);
+params = set_default(params, 'massFluxProjectionRegularization', 1e-12);
+params = set_default(params, 'massFluxMinCellCount', 1.0);
 params = set_default(params, 'projectionInterpolationMethod', 'nearest');
 params = set_default(params, 'projectionTransportDiagnosticsEnable', true);
 params = set_default(params, 'densityTransportDiagnosticsEnable', true);
@@ -62,6 +70,11 @@ fprintf('mean rho transport classic/projected/diff: %.6g / %.6g / %.6g\n', ...
     out.summary.meanDensityTransportClassicRms, ...
     out.summary.meanDensityTransportProjectedRms, ...
     out.summary.meanDensityTransportProjectedMinusClassicRms);
+fprintf('mean mass-flux div before/target/after/res: %.6g / %.6g / %.6g / %.6g\n', ...
+    out.summary.meanMassFluxDivBefore, ...
+    out.summary.meanMassFluxDivTarget, ...
+    out.summary.meanMassFluxDivProjectedAfter, ...
+    out.summary.meanMassFluxDivResidual);
 end
 
 function params = set_default(params, name, value)

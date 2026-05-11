@@ -1,0 +1,33 @@
+Q7c density projection + position repair comparison summary
+=========================================================
+
+seed = 11
+Nx = 32
+Ny = 16
+gamma = 20
+nSteps = 10000
+sampleEvery = 100
+initialPopulationMode = exact_per_cell
+virialDensityRepairStrength = 0.002
+virialDensityRepairK = 1
+virialDensityRepairSmoothPasses = 1
+meanStdClassic = 4.383099970095895
+meanStdProjected = 3.520045245098856
+meanStdRepair = 3.131303719690846
+ratioMeanStdProjectedClassic = 0.8030949029487556
+ratioMeanStdRepairClassic = 0.7144039015889339
+ratioMeanStdRepairProjected = 0.8895634861656181
+meanLowKClassic = 0.001338671558049482
+meanLowKProjected = 9.517400885518801e-05
+meanLowKRepair = 0.0002450960698539258
+meanRhoTransportClassic = 0.07656943316237008
+meanRhoTransportProjected = 0.009222612437523058
+meanRhoTransportRepair = 0.008084585259328054
+nuEffClassic = 0.0192941981884843
+nuEffProjected = 0.02496522450683366
+nuEffRepair = 0.07891199838635327
+R2Classic = 0.8878132362240694
+R2Projected = 0.9174109685636151
+R2Repair = 0.8624045283850286
+meanRepairDisplacementRms = 1.004091253566499e-05
+meanRmsDivAfterRepair = 1.061536546934503e-14

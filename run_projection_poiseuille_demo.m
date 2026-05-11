@@ -27,7 +27,7 @@ if params.storeDensityMaps
 else
     NMaps = [];
 end
-diagHistory = nan(nSamples, 51);
+diagHistory = nan(nSamples, 75);
 % Main columns are documented in out.diagColumns below. The first 24 columns
 % are the original Q3/Q3b diagnostics; later columns add thermal, thermostat
 % and continuous density-transport diagnostics.
@@ -113,7 +113,20 @@ for it = 0:params.nSteps
                 stepDiag.densityTransportClassicMaxAbs, stepDiag.densityTransportProjectedMaxAbs, ...
                 stepDiag.densityTransportProjectedMinusClassicMaxAbs, ...
                 stepDiag.densityTransportClassicPredictedStdAfter, stepDiag.densityTransportProjectedPredictedStdAfter, ...
-                stepDiag.densityTransportProjectedVsClassicStdDelta];
+                stepDiag.densityTransportProjectedVsClassicStdDelta, ...
+                double(stepDiag.virialDensityKickEnabled), stepDiag.virialDensityKickStrength, stepDiag.virialK, ...
+                stepDiag.virialParticleDVRms, stepDiag.virialParticleDVMaxAbs, ...
+                stepDiag.virialPvirRms, stepDiag.virialPvirMaxAbs, ...
+                stepDiag.rmsDivAfterPressureParticleRaw, stepDiag.rmsDivAfterVirialRaw, ...
+                stepDiag.densityTransportPressureOnlyProjectedRms, ...
+                double(stepDiag.virialDensityRepairEnabled), stepDiag.densityRepairStrength, stepDiag.densityRepairK, ...
+                stepDiag.densityRepairDisplacementRms, stepDiag.densityRepairDisplacementMaxAbs, ...
+                stepDiag.densityRepairStdBefore, stepDiag.densityRepairStdAfter, ...
+                stepDiag.densityRepairOutBand20Before, stepDiag.densityRepairOutBand20After, ...
+                stepDiag.densityRepairVelocityRestoreDeltaRms, ...
+                stepDiag.densityRepairVelocityRestoreResidualBeforeRms, ...
+                stepDiag.densityRepairVelocityRestoreResidualAfterRms, ...
+                stepDiag.rmsDivAfterDensityRepair, stepDiag.densityRepairSmoothPasses];
         end
     end
 
@@ -176,7 +189,20 @@ out.diagColumns = {'step','t','rmsDivBefore','rmsDivProjected','rmsDivParticle',
     'densityTransportClassicMax','densityTransportProjectedMax', ...
     'densityTransportProjectedMinusClassicMax', ...
     'densityTransportClassicStdAfter','densityTransportProjectedStdAfter', ...
-    'densityTransportProjectedVsClassicStdDelta'};
+    'densityTransportProjectedVsClassicStdDelta', ...
+    'virialEnabled','virialStrength','virialK', ...
+    'virialParticleDVRms','virialParticleDVMaxAbs', ...
+    'virialPvirRms','virialPvirMaxAbs', ...
+    'rmsDivAfterPressureParticleRaw','rmsDivAfterVirialRaw', ...
+    'densityTransportPressureOnlyProjectedRms', ...
+    'densityRepairEnabled','densityRepairStrength','densityRepairK', ...
+    'densityRepairDisplacementRms','densityRepairDisplacementMaxAbs', ...
+    'densityRepairStdBefore','densityRepairStdAfter', ...
+    'densityRepairOutBand20Before','densityRepairOutBand20After', ...
+    'densityRepairVelocityRestoreDeltaRms', ...
+    'densityRepairVelocityRestoreResidualBeforeRms', ...
+    'densityRepairVelocityRestoreResidualAfterRms', ...
+    'rmsDivAfterDensityRepair','densityRepairSmoothPasses'};
 out.summary = summarize_run(out);
 out.viscosity = analyze_projection_poiseuille_viscosity(out, ...
     'excludeWallCells', params.excludeWallCellsFit, ...
@@ -193,6 +219,11 @@ if out.stoppedEarly
 end
 fprintf('wallModeY                  : %s\n', params.wallModeY);
 fprintf('projectionStrength         : %.6g\n', params.projectionStrength);
+fprintf('virial density kick        : %d  strength=%.6g  K=%.6g  smooth=%d\n', ...
+    params.useVirialDensityKick, params.virialDensityKickStrength, params.virialK, params.virialSmoothPasses);
+fprintf('virial density repair      : %d  strength=%.6g  K=%.6g  smooth=%d  restore=%d\n', ...
+    params.useVirialDensityRepair, params.virialDensityRepairStrength, params.virialDensityRepairK, ...
+    params.virialDensityRepairSmoothPasses, params.virialDensityRepairRestoreVelocity);
 fprintf('last rms div before        : %.12e\n', out.summary.lastRmsDivBefore);
 fprintf('last rms div projected     : %.12e\n', out.summary.lastRmsDivProjected);
 fprintf('last rms div particle grid : %.12e\n', out.summary.lastRmsDivParticle);
@@ -213,6 +244,26 @@ fprintf('continuous rho rms classic/proj/diff: %.6g / %.6g / %.6g\n', ...
     out.summary.lastDensityTransportClassicRms, ...
     out.summary.lastDensityTransportProjectedRms, ...
     out.summary.lastDensityTransportProjectedMinusClassicRms);
+fprintf('virial dv rms/max, Pvir rms/max      : %.6g / %.6g, %.6g / %.6g\n', ...
+    out.summary.lastVirialDVRms, out.summary.lastVirialDVMaxAbs, ...
+    out.summary.lastVirialPvirRms, out.summary.lastVirialPvirMaxAbs);
+fprintf('rms div pressure/repair/virial/final : %.6g / %.6g / %.6g / %.6g\n', ...
+    out.summary.lastRmsDivAfterPressureParticleRaw, ...
+    out.summary.lastRmsDivAfterDensityRepair, ...
+    out.summary.lastRmsDivAfterVirialRaw, ...
+    out.summary.lastRmsDivParticle);
+fprintf('density repair dx rms/max, std b/a   : %.6g / %.6g, %.6g / %.6g\n', ...
+    out.summary.lastDensityRepairDisplacementRms, ...
+    out.summary.lastDensityRepairDisplacementMaxAbs, ...
+    out.summary.lastDensityRepairStdBefore, ...
+    out.summary.lastDensityRepairStdAfter);
+fprintf('density repair restore dv/res b/a    : %.6g / %.6g / %.6g\n', ...
+    out.summary.lastDensityRepairVelocityRestoreDeltaRms, ...
+    out.summary.lastDensityRepairVelocityRestoreResidualBeforeRms, ...
+    out.summary.lastDensityRepairVelocityRestoreResidualAfterRms);
+fprintf('rho transport pressure-only/final    : %.6g / %.6g\n', ...
+    out.summary.lastDensityTransportPressureOnlyProjectedRms, ...
+    out.summary.lastDensityTransportProjectedRms);
 fprintf('nu_eff fit                 : %.12e\n', out.viscosity.nuEff);
 fprintf('fit R2                     : %.6f\n', out.viscosity.R2);
 
@@ -239,6 +290,21 @@ params = set_default(params, 'projectionStrength', 1.0);
 params = set_default(params, 'projectionInterpolationMethod', 'nearest');
 params = set_default(params, 'projectionTransportDiagnosticsEnable', true);
 params = set_default(params, 'densityTransportDiagnosticsEnable', true);
+params = set_default(params, 'useVirialDensityKick', false);
+params = set_default(params, 'virialDensityKickStrength', 0.0);
+params = set_default(params, 'virialK', 1.0);
+params = set_default(params, 'virialSmoothPasses', 0);
+params = set_default(params, 'virialMinCellCount', 1.0);
+params = set_default(params, 'virialMaxParticleKick', Inf);
+params = set_default(params, 'virialInterpolationMethod', params.projectionInterpolationMethod);
+params = set_default(params, 'useVirialDensityRepair', false);
+params = set_default(params, 'virialDensityRepairStrength', 0.0);
+params = set_default(params, 'virialDensityRepairK', params.virialK);
+params = set_default(params, 'virialDensityRepairSmoothPasses', params.virialSmoothPasses);
+params = set_default(params, 'virialDensityRepairMinCellCount', params.virialMinCellCount);
+params = set_default(params, 'virialDensityRepairMaxDisplacementFraction', 0.05);
+params = set_default(params, 'virialDensityRepairRestoreVelocity', true);
+params = set_default(params, 'virialDensityRepairInterpolationMethod', 'nearest');
 params = set_default(params, 'computeFullDiagnosticsEveryStep', false);
 params = set_default(params, 'storeDensityMaps', false);
 params = set_default(params, 'initialPopulationMode', 'random_uniform');
@@ -284,6 +350,30 @@ if isempty(H)
     summary.lastDensityTransportClassicRms = NaN;
     summary.lastDensityTransportProjectedRms = NaN;
     summary.lastDensityTransportProjectedMinusClassicRms = NaN;
+    summary.lastVirialEnabled = NaN;
+    summary.lastVirialStrength = NaN;
+    summary.lastVirialK = NaN;
+    summary.lastVirialDVRms = NaN;
+    summary.lastVirialDVMaxAbs = NaN;
+    summary.lastVirialPvirRms = NaN;
+    summary.lastVirialPvirMaxAbs = NaN;
+    summary.lastRmsDivAfterPressureParticleRaw = NaN;
+    summary.lastRmsDivAfterVirialRaw = NaN;
+    summary.lastDensityTransportPressureOnlyProjectedRms = NaN;
+    summary.lastDensityRepairEnabled = NaN;
+    summary.lastDensityRepairStrength = NaN;
+    summary.lastDensityRepairK = NaN;
+    summary.lastDensityRepairDisplacementRms = NaN;
+    summary.lastDensityRepairDisplacementMaxAbs = NaN;
+    summary.lastDensityRepairStdBefore = NaN;
+    summary.lastDensityRepairStdAfter = NaN;
+    summary.lastDensityRepairOutBand20Before = NaN;
+    summary.lastDensityRepairOutBand20After = NaN;
+    summary.lastDensityRepairVelocityRestoreDeltaRms = NaN;
+    summary.lastDensityRepairVelocityRestoreResidualBeforeRms = NaN;
+    summary.lastDensityRepairVelocityRestoreResidualAfterRms = NaN;
+    summary.lastRmsDivAfterDensityRepair = NaN;
+    summary.lastDensityRepairSmoothPasses = NaN;
     return;
 end
 summary.lastRmsDivBefore = H(end, 3);
@@ -338,6 +428,39 @@ summary.meanDensityTransportProjectedMinusClassicRms = mean(H(:, 45), 'omitnan')
 summary.meanPopStdClassic = mean(H(:, 9), 'omitnan');
 summary.meanPopStdProjection = mean(H(:, 10), 'omitnan');
 summary.meanDivReductionParticle = mean(H(:, 5) ./ max(H(:, 3), eps), 'omitnan');
+summary.lastVirialEnabled = H(end, 52);
+summary.lastVirialStrength = H(end, 53);
+summary.lastVirialK = H(end, 54);
+summary.lastVirialDVRms = H(end, 55);
+summary.lastVirialDVMaxAbs = H(end, 56);
+summary.lastVirialPvirRms = H(end, 57);
+summary.lastVirialPvirMaxAbs = H(end, 58);
+summary.lastRmsDivAfterPressureParticleRaw = H(end, 59);
+summary.lastRmsDivAfterVirialRaw = H(end, 60);
+summary.lastDensityTransportPressureOnlyProjectedRms = H(end, 61);
+summary.lastDensityRepairEnabled = H(end, 62);
+summary.lastDensityRepairStrength = H(end, 63);
+summary.lastDensityRepairK = H(end, 64);
+summary.lastDensityRepairDisplacementRms = H(end, 65);
+summary.lastDensityRepairDisplacementMaxAbs = H(end, 66);
+summary.lastDensityRepairStdBefore = H(end, 67);
+summary.lastDensityRepairStdAfter = H(end, 68);
+summary.lastDensityRepairOutBand20Before = H(end, 69);
+summary.lastDensityRepairOutBand20After = H(end, 70);
+summary.lastDensityRepairVelocityRestoreDeltaRms = H(end, 71);
+summary.lastDensityRepairVelocityRestoreResidualBeforeRms = H(end, 72);
+summary.lastDensityRepairVelocityRestoreResidualAfterRms = H(end, 73);
+summary.lastRmsDivAfterDensityRepair = H(end, 74);
+summary.lastDensityRepairSmoothPasses = H(end, 75);
+summary.meanVirialDVRms = mean(H(:, 55), 'omitnan');
+summary.meanVirialPvirRms = mean(H(:, 57), 'omitnan');
+summary.meanRmsDivAfterVirialRaw = mean(H(:, 60), 'omitnan');
+summary.meanDensityTransportPressureOnlyProjectedRms = mean(H(:, 61), 'omitnan');
+summary.meanDensityRepairDisplacementRms = mean(H(:, 65), 'omitnan');
+summary.meanDensityRepairStdBefore = mean(H(:, 67), 'omitnan');
+summary.meanDensityRepairStdAfter = mean(H(:, 68), 'omitnan');
+summary.meanDensityRepairVelocityRestoreResidualAfterRms = mean(H(:, 73), 'omitnan');
+summary.meanRmsDivAfterDensityRepair = mean(H(:, 74), 'omitnan');
 end
 
 function make_figures(out)
@@ -351,7 +474,7 @@ title('Poiseuille profile with pressure projection');
 if ~isempty(out.diagHistory)
     H = out.diagHistory;
     figure('Name', 'Projection Poiseuille diagnostics');
-    tiledlayout(5, 1);
+    tiledlayout(6, 1);
     nexttile;
     semilogy(H(:, 2), H(:, 3), '-', H(:, 2), H(:, 5), '-');
     ylabel('rms div'); grid on; legend('before', 'particle after');
@@ -365,6 +488,9 @@ if ~isempty(out.diagHistory)
     ylabel('forecast pop rms'); grid on; legend('classic-now', 'projected-now', 'projected-classic');
     nexttile;
     plot(H(:, 2), H(:, 43), '-', H(:, 2), H(:, 44), '--', H(:, 2), H(:, 45), ':');
-    xlabel('t'); ylabel('cont. rho rms'); grid on; legend('classic', 'projected', 'diff');
+    ylabel('cont. rho rms'); grid on; legend('classic', 'projected/final', 'diff');
+    nexttile;
+    plot(H(:, 2), H(:, 55), '-', H(:, 2), H(:, 65), '--', H(:, 2), H(:, 60), ':', H(:, 2), H(:, 74), '-.');
+    xlabel('t'); ylabel('virial/repair diagnostics'); grid on; legend('virial dv rms', 'repair dx rms', 'div after virial', 'div after repair');
 end
 end

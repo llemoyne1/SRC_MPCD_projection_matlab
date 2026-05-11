@@ -1,0 +1,24 @@
+Density projection comparison summary
+=====================================
+
+seed = 11
+Nx = 32
+Ny = 16
+gamma = 20
+nSteps = 10000
+sampleEvery = 100
+initialPopulationMode = exact_per_cell
+initialStdClassic = 0
+initialStdProjected = 0
+meanStdClassic = 4.383099970095895
+meanStdProjected = 3.520045245098856
+ratioMeanStd = 0.8030949029487556
+meanRmsRelClassic = 0.218940875348144
+meanRmsRelProjected = 0.1758303010392333
+ratioMeanRmsRel = 0.8030949029487554
+meanLowKClassic = 0.001338671558049482
+meanLowKProjected = 9.517400885518801e-05
+ratioMeanLowK = 0.07109586237408505
+meanRhoTransportClassic = 0.07656943316237008
+meanRhoTransportProjected = 0.009222612437523058
+ratioMeanRhoTransport = 0.1204477042159363

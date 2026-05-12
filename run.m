@@ -1,22 +1,24 @@
-%% run_q9_lowk_mass_flux_3000_check.m
+%% run_q9_lowk_mass_flux_10000_check.m
 clear functions
 close all
 clc
 
 tag = datestr(now, 'yyyymmdd_HHMMSS');
-outputDir = ['q9_lowk_mass_flux_3000_check_' tag];
+outputDir = ['q9_lowk_mass_flux_30000_check_' tag];
+
 if ~exist(outputDir, 'dir')
     mkdir(outputDir);
 end
+
 params = struct();
 
 params.Nx = 32;
 params.Ny = 16;
 params.gamma = 20;
 
-params.nSteps = 3000;
+params.nSteps = 30000;
 params.sampleEvery = 100;
-params.progressEvery = 500;
+params.progressEvery = 1000;
 params.maxWallClockSeconds = Inf;
 
 params.bodyForceX = 0.02;
@@ -53,7 +55,7 @@ params.outputDir = outputDir;
 diary(fullfile(outputDir, 'console_log.txt'));
 diary on
 
-fprintf('\n=== Q9 low-k mass-flux 3000-step check ===\n');
+fprintf('\n=== Q9 low-k mass-flux 10000-step check ===\n');
 
 cmp = run_compare_density_projection_lowk_mass_flux_poiseuille(params);
 

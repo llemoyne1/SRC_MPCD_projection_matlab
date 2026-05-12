@@ -10,6 +10,8 @@ function shed = projection_wake_shedding_diagnostics(t, signal, params, Uref)
 %
 % Returned fields include frequency, Strouhal number St = f D / Uref,
 % dominant period, peak amplitude, and a simple peak-to-median spectral SNR.
+% Optionally, the peak search can be restricted to a plausible Strouhal band
+% to avoid selecting high-frequency collision noise on long particle runs.
 
 if nargin < 4 || isempty(Uref)
     Uref = NaN;
@@ -75,12 +77,37 @@ if isempty(positive)
     return;
 end
 
-Ppos = P(positive);
-fpos = f(positive);
+PposFull = P(positive);
+fposFull = f(positive);
+D = 2 * get_param(params, 'cylinderRadius', NaN);
+
+useBand = logical(get_param(params, 'sheddingUseStrouhalBand', true));
+StMin = get_param(params, 'sheddingStrouhalMin', 0.05);
+StMax = get_param(params, 'sheddingStrouhalMax', 0.50);
+if useBand && isfinite(Uref) && abs(Uref) > eps && isfinite(D) && D > 0
+    StFull = fposFull * D / abs(Uref);
+    band = isfinite(StFull) & StFull >= StMin & StFull <= StMax;
+else
+    band = true(size(fposFull));
+end
+
+if ~any(band)
+    shed.note = 'no FFT bins inside Strouhal search band';
+    shed.freq = fposFull;
+    shed.power = PposFull;
+    shed.D = D;
+    shed.Uref = Uref;
+    shed.searchStrouhalMin = StMin;
+    shed.searchStrouhalMax = StMax;
+    shed.usedBandLimitedSearch = useBand;
+    return;
+end
+
+Ppos = PposFull(band);
+fpos = fposFull(band);
 [peakPower, idx] = max(Ppos);
 fPeak = fpos(idx);
 
-D = 2 * get_param(params, 'cylinderRadius', NaN);
 if isfinite(Uref) && abs(Uref) > eps && isfinite(D) && D > 0
     St = fPeak * D / abs(Uref);
 else
@@ -110,6 +137,12 @@ shed.Uref = Uref;
 shed.D = D;
 shed.freq = fpos;
 shed.power = Ppos;
+shed.freqFull = fposFull;
+shed.powerFull = PposFull;
+shed.searchStrouhalMin = StMin;
+shed.searchStrouhalMax = StMax;
+shed.usedBandLimitedSearch = useBand;
+shed.nSearchBins = numel(fpos);
 end
 
 function shed = empty_shed()
@@ -130,6 +163,12 @@ shed.Uref = NaN;
 shed.D = NaN;
 shed.freq = [];
 shed.power = [];
+shed.freqFull = [];
+shed.powerFull = [];
+shed.searchStrouhalMin = NaN;
+shed.searchStrouhalMax = NaN;
+shed.usedBandLimitedSearch = false;
+shed.nSearchBins = 0;
 end
 
 function w = hann_local(N)

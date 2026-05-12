@@ -107,6 +107,30 @@ for it = 0:params.nSteps
         end
     end
 
+    if logical(getf(params, 'abortOnUnstable', false)) && it > 0 && exist('sampleDiag', 'var')
+        unstable = false;
+        reasons = {};
+        if abs(sampleDiag.meanUxFluid) > getf(params, 'maxStableAbsMeanUx', Inf)
+            unstable = true; reasons{end+1} = 'meanUx'; %#ok<AGROW>
+        end
+        if sampleDiag.vorticity.meanEnstrophy > getf(params, 'maxStableMeanEnstrophy', Inf)
+            unstable = true; reasons{end+1} = 'enstrophy'; %#ok<AGROW>
+        end
+        if abs(sampleDiag.meanUyFluid) > getf(params, 'maxStableAbsMeanUy', Inf)
+            unstable = true; reasons{end+1} = 'meanUy'; %#ok<AGROW>
+        end
+        if unstable
+            warning('run_projection_cylinder_demo:Unstable', ...
+                'Stopping early at step %d/%d because stability thresholds were exceeded: %s.', ...
+                it, params.nSteps, strjoin(reasons, ', '));
+            actualLastStep = it;
+            stopRequested = true;
+        end
+    end
+    if stopRequested
+        break;
+    end
+
     if it == params.nSteps
         break;
     end
@@ -120,6 +144,10 @@ for it = 0:params.nSteps
     stepParams.computeDiagnostics = params.computeFullDiagnosticsEveryStep || willSample || willProgress || willBeFinal;
 
     [state, stepDiag] = mpcd_step_projection_cylinder(state, stepParams);
+    [state, flowControlInfo] = apply_mean_flow_control(state, params);
+    stepDiag.meanFlowControl = flowControlInfo;
+    stepDiag.meanVxAfterFlowControl = flowControlInfo.meanVxAfter;
+    stepDiag.meanVyAfterFlowControl = flowControlInfo.meanVyAfter;
     actualLastStep = nextStep;
     lastStepDiag = stepDiag;
 
@@ -127,7 +155,7 @@ for it = 0:params.nSteps
         lastProgressPrint = actualLastStep;
         fprintf('  cylinder step %d/%d, t=%.6g, meanUx=%.4g, hits=%d, div=%.3e, mfRes=%.3e, elapsed=%.1fs\n', ...
             actualLastStep, params.nSteps, actualLastStep*params.dt, ...
-            finite_or_nan(getf(stepDiag, 'meanVxAfterProjection')), ...
+            finite_or_nan(getf(stepDiag, 'meanVxAfterFlowControl', getf(stepDiag, 'meanVxAfterProjection'))), ...
             round(finite_or_zero(getf(stepDiag, 'cylinderHits'))), ...
             finite_or_nan(getf(stepDiag, 'rmsDivParticleAfter')), ...
             finite_or_nan(getf(stepDiag, 'rmsMassFluxDivResidual')), toc(wallClockTic));
@@ -253,6 +281,54 @@ if params.makeFigures
 end
 end
 
+
+function [state, info] = apply_mean_flow_control(state, params)
+mode = lower(strrep(char(string(getf(params, 'meanFlowControlMode', 'off'))), '-', '_'));
+info = struct('enabled', false, 'mode', mode, 'targetUx', NaN, 'targetUy', NaN, ...
+    'meanVxBefore', mean(state.v(:,1), 'omitnan'), 'meanVyBefore', mean(state.v(:,2), 'omitnan'), ...
+    'meanVxAfter', mean(state.v(:,1), 'omitnan'), 'meanVyAfter', mean(state.v(:,2), 'omitnan'), ...
+    'deltaUx', 0.0, 'deltaUy', 0.0, 'gain', 0.0);
+if strcmp(mode, 'off') || strcmp(mode, 'none')
+    return;
+end
+if ~ismember(mode, {'relax_to_target','target','bulk_velocity_control'})
+    error('Unknown meanFlowControlMode: %s', mode);
+end
+Ux0 = info.meanVxBefore;
+Uy0 = info.meanVyBefore;
+targetUx = getf(params, 'targetMeanVelocityX', getf(params, 'initialMeanVelocityX', 0.0));
+targetUy = getf(params, 'targetMeanVelocityY', 0.0);
+tau = max(getf(params, 'meanFlowRelaxationTau', 0.05), eps);
+gain = min(max(params.dt / tau, 0.0), 1.0);
+maxDelta = getf(params, 'meanFlowCorrectionMax', Inf);
+
+dUx = gain * (targetUx - Ux0);
+if isfinite(maxDelta)
+    dUx = min(max(dUx, -maxDelta), maxDelta);
+end
+state.v(:,1) = state.v(:,1) + dUx;
+
+dUy = 0.0;
+if logical(getf(params, 'meanFlowControlRemoveMeanY', true))
+    dUy = -Uy0;
+else
+    dUy = gain * (targetUy - Uy0);
+end
+if isfinite(maxDelta)
+    dUy = min(max(dUy, -maxDelta), maxDelta);
+end
+state.v(:,2) = state.v(:,2) + dUy;
+
+info.enabled = true;
+info.targetUx = targetUx;
+info.targetUy = targetUy;
+info.deltaUx = dUx;
+info.deltaUy = dUy;
+info.gain = gain;
+info.meanVxAfter = mean(state.v(:,1), 'omitnan');
+info.meanVyAfter = mean(state.v(:,2), 'omitnan');
+end
+
 function row = step_diag_row(it, params, stepDiag, sampleDiag)
 row = [it, it*params.dt, ...
     getf(stepDiag,'rmsDivBefore'), getf(stepDiag,'rmsDivParticleAfter'), ...
@@ -311,6 +387,8 @@ end
 diag = out.diagHistory;
 cols = out.diagColumns;
 summary = struct();
+summary.actualLastStep = out.actualLastStep;
+summary.stoppedEarly = out.stoppedEarly;
 summary.finalMeanUx = out.meanUxSeries(end);
 summary.finalMeanUy = out.meanUySeries(end);
 summary.meanMeanUx = mean(out.meanUxSeries, 'omitnan');
@@ -475,6 +553,30 @@ params = set_default(params, 'lowKMaxIndex', 2);
 params = set_default(params, 'makeFigures', false);
 params = set_default(params, 'computeDiagnostics', true);
 params = set_default(params, 'computeFullDiagnosticsEveryStep', false);
+
+% Mean-flow control is useful for long periodic-cylinder runs.  A constant
+% body force can inject energy indefinitely in this closed periodic domain;
+% this optional controller keeps the bulk velocity near a prescribed target
+% without changing particle positions or thermal fluctuations.
+params = set_default(params, 'meanFlowControlMode', 'off');
+params = set_default(params, 'targetMeanVelocityX', params.initialMeanVelocityX);
+params = set_default(params, 'targetMeanVelocityY', 0.0);
+params = set_default(params, 'meanFlowRelaxationTau', 0.05);
+params = set_default(params, 'meanFlowCorrectionMax', Inf);
+params = set_default(params, 'meanFlowControlRemoveMeanY', true);
+
+% Safety stops for exploratory long runs.  These are disabled by default and
+% enabled by the sweep script.
+params = set_default(params, 'abortOnUnstable', false);
+params = set_default(params, 'maxStableAbsMeanUx', Inf);
+params = set_default(params, 'maxStableAbsMeanUy', Inf);
+params = set_default(params, 'maxStableMeanEnstrophy', Inf);
+
+% Band-limited shedding search.  Enabled by default because unrestricted FFT
+% peak picking tends to select collision-scale peaks in noisy particle runs.
+params = set_default(params, 'sheddingUseStrouhalBand', true);
+params = set_default(params, 'sheddingStrouhalMin', 0.05);
+params = set_default(params, 'sheddingStrouhalMax', 0.50);
 end
 
 function params = set_default(params, name, value)

@@ -27,7 +27,7 @@ if params.storeDensityMaps
 else
     NMaps = [];
 end
-diagHistory = nan(nSamples, 51);
+diagHistory = nan(nSamples, 56);
 % Main columns are documented in out.diagColumns below. The first 24 columns
 % are the original Q3/Q3b diagnostics; later columns add thermal, thermostat
 % and continuous density-transport diagnostics.
@@ -113,7 +113,10 @@ for it = 0:params.nSteps
                 stepDiag.densityTransportClassicMaxAbs, stepDiag.densityTransportProjectedMaxAbs, ...
                 stepDiag.densityTransportProjectedMinusClassicMaxAbs, ...
                 stepDiag.densityTransportClassicPredictedStdAfter, stepDiag.densityTransportProjectedPredictedStdAfter, ...
-                stepDiag.densityTransportProjectedVsClassicStdDelta];
+                stepDiag.densityTransportProjectedVsClassicStdDelta, ...
+                stepDiag.rmsMassFluxDivBefore, stepDiag.rmsMassFluxDivTarget, ...
+                stepDiag.rmsMassFluxDivProjectedAfter, stepDiag.rmsMassFluxDivResidual, ...
+                stepDiag.rmsMassFluxDivParticleAfter];
         end
     end
 
@@ -176,7 +179,9 @@ out.diagColumns = {'step','t','rmsDivBefore','rmsDivProjected','rmsDivParticle',
     'densityTransportClassicMax','densityTransportProjectedMax', ...
     'densityTransportProjectedMinusClassicMax', ...
     'densityTransportClassicStdAfter','densityTransportProjectedStdAfter', ...
-    'densityTransportProjectedVsClassicStdDelta'};
+    'densityTransportProjectedVsClassicStdDelta', ...
+    'massFluxDivBefore','massFluxDivTarget','massFluxDivProjectedAfter', ...
+    'massFluxDivResidual','massFluxDivParticleAfter'};
 out.summary = summarize_run(out);
 out.viscosity = analyze_projection_poiseuille_viscosity(out, ...
     'excludeWallCells', params.excludeWallCellsFit, ...
@@ -193,6 +198,10 @@ if out.stoppedEarly
 end
 fprintf('wallModeY                  : %s\n', params.wallModeY);
 fprintf('projectionStrength         : %.6g\n', params.projectionStrength);
+fprintf('massFluxProjectionMode     : %s  strength=%.6g  beta=%.6g\n', ...
+    char(params.massFluxProjectionMode), params.massFluxProjectionStrength, params.massFluxDensityRelaxationBeta);
+fprintf('massFlux hybrid/filter     : afterVelocity=%d  filter=%s  lowK=%d\n', ...
+    params.massFluxApplyAfterVelocityProjection, char(params.massFluxTargetFilter), params.massFluxLowKMaxIndex);
 fprintf('last rms div before        : %.12e\n', out.summary.lastRmsDivBefore);
 fprintf('last rms div projected     : %.12e\n', out.summary.lastRmsDivProjected);
 fprintf('last rms div particle grid : %.12e\n', out.summary.lastRmsDivParticle);
@@ -213,6 +222,11 @@ fprintf('continuous rho rms classic/proj/diff: %.6g / %.6g / %.6g\n', ...
     out.summary.lastDensityTransportClassicRms, ...
     out.summary.lastDensityTransportProjectedRms, ...
     out.summary.lastDensityTransportProjectedMinusClassicRms);
+fprintf('mass flux div before/target/after/res : %.6g / %.6g / %.6g / %.6g\n', ...
+    out.summary.lastMassFluxDivBefore, ...
+    out.summary.lastMassFluxDivTarget, ...
+    out.summary.lastMassFluxDivProjectedAfter, ...
+    out.summary.lastMassFluxDivResidual);
 fprintf('nu_eff fit                 : %.12e\n', out.viscosity.nuEff);
 fprintf('fit R2                     : %.6f\n', out.viscosity.R2);
 
@@ -236,6 +250,14 @@ params = set_default(params, 'nSteps', 500);
 params = set_default(params, 'sampleEvery', 10);
 params = set_default(params, 'projectionEnable', true);
 params = set_default(params, 'projectionStrength', 1.0);
+params = set_default(params, 'massFluxProjectionMode', 'off');
+params = set_default(params, 'massFluxProjectionStrength', params.projectionStrength);
+params = set_default(params, 'massFluxDensityRelaxationBeta', 0.0);
+params = set_default(params, 'massFluxApplyAfterVelocityProjection', false);
+params = set_default(params, 'massFluxTargetFilter', 'none');
+params = set_default(params, 'massFluxLowKMaxIndex', 2);
+params = set_default(params, 'massFluxProjectionRegularization', 1e-12);
+params = set_default(params, 'massFluxMinCellCount', 1.0);
 params = set_default(params, 'projectionInterpolationMethod', 'nearest');
 params = set_default(params, 'projectionTransportDiagnosticsEnable', true);
 params = set_default(params, 'densityTransportDiagnosticsEnable', true);
@@ -284,6 +306,11 @@ if isempty(H)
     summary.lastDensityTransportClassicRms = NaN;
     summary.lastDensityTransportProjectedRms = NaN;
     summary.lastDensityTransportProjectedMinusClassicRms = NaN;
+    summary.lastMassFluxDivBefore = NaN;
+    summary.lastMassFluxDivTarget = NaN;
+    summary.lastMassFluxDivProjectedAfter = NaN;
+    summary.lastMassFluxDivResidual = NaN;
+    summary.lastMassFluxDivParticleAfter = NaN;
     return;
 end
 summary.lastRmsDivBefore = H(end, 3);
@@ -338,6 +365,29 @@ summary.meanDensityTransportProjectedMinusClassicRms = mean(H(:, 45), 'omitnan')
 summary.meanPopStdClassic = mean(H(:, 9), 'omitnan');
 summary.meanPopStdProjection = mean(H(:, 10), 'omitnan');
 summary.meanDivReductionParticle = mean(H(:, 5) ./ max(H(:, 3), eps), 'omitnan');
+if size(H, 2) >= 56
+    summary.lastMassFluxDivBefore = H(end, 52);
+    summary.lastMassFluxDivTarget = H(end, 53);
+    summary.lastMassFluxDivProjectedAfter = H(end, 54);
+    summary.lastMassFluxDivResidual = H(end, 55);
+    summary.lastMassFluxDivParticleAfter = H(end, 56);
+    summary.meanMassFluxDivBefore = mean(H(:, 52), 'omitnan');
+    summary.meanMassFluxDivTarget = mean(H(:, 53), 'omitnan');
+    summary.meanMassFluxDivProjectedAfter = mean(H(:, 54), 'omitnan');
+    summary.meanMassFluxDivResidual = mean(H(:, 55), 'omitnan');
+    summary.meanMassFluxDivParticleAfter = mean(H(:, 56), 'omitnan');
+else
+    summary.lastMassFluxDivBefore = NaN;
+    summary.lastMassFluxDivTarget = NaN;
+    summary.lastMassFluxDivProjectedAfter = NaN;
+    summary.lastMassFluxDivResidual = NaN;
+    summary.lastMassFluxDivParticleAfter = NaN;
+    summary.meanMassFluxDivBefore = NaN;
+    summary.meanMassFluxDivTarget = NaN;
+    summary.meanMassFluxDivProjectedAfter = NaN;
+    summary.meanMassFluxDivResidual = NaN;
+    summary.meanMassFluxDivParticleAfter = NaN;
+end
 end
 
 function make_figures(out)

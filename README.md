@@ -2,7 +2,7 @@
 
 Prototype MATLAB pour le développement, le diagnostic et la validation de méthodes SRC/MPCD quasi-incompressibles fondées sur des projections de vitesse et de flux de masse.
 
-Ce dépôt contient une chaîne expérimentale autour de méthodes SRC/MPCD/SRD pour écoulements périodiques, en canal et sur géométries simples. L’objectif actuel est de réduire les modes compressifs de densité sans imposer une redistribution particulaire dure, tout en vérifiant que la projection de flux de masse ne détruit pas les structures hydrodynamiques utiles : profils moyens, compression quasi-incompressible, vortex cohérents, couches de cisaillement et recirculations.
+Ce dépôt contient une chaîne expérimentale autour de méthodes SRC/MPCD/SRD pour écoulements périodiques ou en canal, avec un accent actuel sur la réduction des modes compressifs de densité sans imposer une redistribution particulaire dure.
 
 État de référence courant :
 
@@ -17,6 +17,10 @@ Validation acquise :
   - marche / step-channel 10000 steps
 Validation non stabilisée à ce stade :
   - cylindre / von Kármán long
+Branche de travail : feature/q8-mass-flux-projection
+Commit de base Q9 : 14c84fe
+Méthode validée actuelle : Q9
+Cas validé : Poiseuille, 30000 steps, Nx=32, Ny=16, gamma=20, seed=11
 ```
 
 ---
@@ -116,6 +120,7 @@ reprojection finale optionnelle de vitesse
 Le choix important est que Q9 ne cherche pas à corriger tout le bruit cellulaire de densité. Elle cible seulement les grandes longueurs d’onde de densité, via un filtrage low-k.
 
 Paramètres génériques de référence :
+Paramètres de référence :
 
 ```matlab
 params.projectionStrength = 1.0;
@@ -151,6 +156,9 @@ SRC/MPCD classique
 
 La reprojection finale partielle est un compromis : elle réduit la divergence finale réintroduite par la correction de flux de masse, sans annuler entièrement le bénéfice low-k.
 
+-> thermostat optionnel
+```
+
 ---
 
 ## 3. Interprétation de Q9
@@ -183,6 +191,9 @@ stabilité temporelle
 ## 4. Résultats de validation Q9
 
 ### 4.1 Poiseuille 30000 steps — validé
+---
+
+## 4. Résultat de référence Q9 — Poiseuille 30000 steps
 
 Configuration :
 
@@ -529,6 +540,10 @@ Cette validation complète Taylor-Green : Q9 préserve non seulement un vortex l
 | `run_compare_projection_taylor_green_q6_q9.m` | Comparaison Taylor-Green Q6/Q9 |
 | `run_compare_projection_step_q6_q9.m` | Comparaison marche Q6/Q9 |
 | `run_compare_projection_cylinder_q6_q9.m` | Comparaison cylindre Q6/Q9 |
+| `run_compare_density_projection_lowk_mass_flux_poiseuille.m` | Comparaison classic / Q6 projection / Q9 low-k mass-flux |
+| `run_compare_density_projection_mass_flux_poiseuille.m` | Comparaison avec projection de flux de masse générale |
+| `run_projection_poiseuille_demo.m` | Démonstration Poiseuille courte |
+| `run_projection_poiseuille_long_demo.m` | Run Poiseuille long avec analyse viscosité |
 | `test_density_homogeneity_lowk_mass_flux_compare_short.m` | Test court de non-régression Q9 |
 | `test_projection_mass_flux_grid_only.m` | Test grille seule de la projection flux de masse |
 
@@ -556,6 +571,8 @@ Cette validation complète Taylor-Green : Q9 préserve non seulement un vortex l
 | `projection_initialize_particles_cylinder.m` | Initialisation hors cylindre |
 | `projection_initialize_particles_step_channel.m` | Initialisation fluide pour marche |
 | `projection_initialize_particles_taylor_green.m` | Initialisation Taylor-Green |
+| `mpcd_apply_wall_bc_y.m` | Conditions limites en `y` |
+| `projection_initialize_particles.m` | Initialisation particulaire, dont `exact_per_cell` |
 
 ---
 
@@ -567,6 +584,7 @@ Cette validation complète Taylor-Green : Q9 préserve non seulement un vortex l
 | `projection_project_grid_periodic_fft.m` | Projection périodique FFT |
 | `projection_project_mass_flux_periodic_x_neumann_y.m` | Projection du flux de masse `N u`, utilisée par Q9 en canal |
 | `projection_project_mass_flux_periodic_fft.m` | Projection du flux de masse en domaine périodique |
+| `projection_project_mass_flux_periodic_x_neumann_y.m` | Projection du flux de masse `N u`, utilisée par Q9 |
 | `projection_interpolate_grid_delta_to_particles.m` | Interpolation de la correction grille vers particules |
 | `projection_deposit_particles_to_grid.m` | Dépôt particules-grille |
 
@@ -594,6 +612,7 @@ Cette validation complète Taylor-Green : Q9 préserve non seulement un vortex l
 ### Ancienne chaîne incompressible / liquid closure
 
 Ces fichiers sont conservés comme base historique et pour de futures fermetures liquides plus physiques :
+Ces fichiers sont conservés comme base historique et pour les futurs tests piston/liquide :
 
 | Fichier | Rôle |
 |---|---|
@@ -610,6 +629,13 @@ Ces fichiers sont conservés comme base historique et pour de futures fermetures
 ## 6. Reproduire les runs de référence
 
 ### Poiseuille Q9 30000 steps
+Ces fichiers ne sont pas encore la chaîne Q9 proprement dite. Ils serviront pour construire un futur cas piston Q9.
+
+---
+
+## 6. Reproduire le run Q9 de référence
+
+Depuis MATLAB, dans le répertoire du dépôt :
 
 ```matlab
 clear
@@ -620,6 +646,7 @@ run_q9_reference_lowk_mass_flux_30000
 ```
 
 Dossier typique :
+Le script crée un dossier de sortie de la forme :
 
 ```text
 q9_reference_lowk_mass_flux_30000_YYYYMMDD_HHMMSS/
@@ -702,6 +729,25 @@ run_q9_vonkarman_re_st_sweep
 
 Ce cas n’est pas encore validé en long. Les résultats Strouhal ne doivent pas être interprétés tant que la stabilité temporelle du banc n’est pas obtenue.
 
+Ce dossier contient typiquement :
+
+```text
+console_log.txt
+q9_reference_lowk_mass_flux_30000.mat
+q9_reference_lowk_mass_flux_30000_summary.csv
+q9_reference_lowk_mass_flux_30000_summary.txt
+```
+
+Le fichier `.mat` sauvegarde :
+
+```text
+params
+outQ9
+metricsQ9
+summary
+refQ6
+```
+
 ---
 
 ## 7. Paramètres essentiels
@@ -724,6 +770,22 @@ params.initialPopulationMode = 'exact_per_fluid_cell';
 ```
 
 afin de ne peupler que les cellules fluides.
+---
+
+### Forçage et murs
+
+```matlab
+params.bodyForceX = 0.02;
+params.wallModeY = 'thermalize';
+```
+
+Le cas Poiseuille courant est un canal :
+
+```text
+périodique en x
+borné en y
+forçage volumique en x
+```
 
 ---
 
@@ -876,6 +938,7 @@ P = P_{\mathrm{kin}} + P_{\mathrm{vir}}
 ou un module de compressibilité réaliste.
 
 Pour les futurs cas piston thermodynamiques, il faudra donc distinguer :
+Pour le futur cas piston, il faudra donc distinguer :
 
 ```text
 comportement quasi-incompressible cinématique
@@ -1096,6 +1159,84 @@ marche plus longue ou plus résolue ;
 obstacle carré aligné grille ;
 cylindre avec meilleure résolution ;
 éventuellement projection fluide/solide masquée.
+Objectif futur :
+
+```matlab
+[stateOut, diag] = mpcd_apply_q9_projection_channel(stateClassic, params)
+```
+
+Cette extraction permettra d’utiliser Q9 en dehors du seul fichier :
+
+```text
+mpcd_step_projection_poiseuille.m
+```
+
+Elle facilitera ensuite les cas piston et cylindre.
+
+---
+
+### Étape 3 — Cas piston
+
+Objectif : tester le comportement liquide ou quasi-incompressible en compression.
+
+Premiers diagnostics recommandés :
+
+```text
+masse totale
+std(N)
+out-band
+low-k density energy
+div(u)
+div(Nu)
+densité moyenne active
+énergie cinétique
+pression cinétique Pkin
+```
+
+Le premier cas piston doit être lent et modéré, par exemple une compression de 5 % à 10 %, afin de tester la réponse quasi-statique avant de passer à des compressions plus fortes.
+
+Point d’interprétation :
+
+```text
+Q9 peut réduire les modes compressifs sans encore fournir une vraie EOS liquide.
+```
+
+Si la pression piston est un objectif central, il faudra probablement réintroduire une fermeture de pression ou virielle compatible avec Q9.
+
+---
+
+### Étape 4 — Cas cylindre / von Kármán
+
+Objectif : vérifier que Q9 ne détruit pas les structures fines et la vorticité.
+
+Cas minimal recommandé :
+
+```text
+canal périodique en x
+murs en y
+obstacle circulaire
+forçage uniforme
+comparaison Q6 vs Q9
+```
+
+Diagnostics recommandés :
+
+```text
+champ de vorticité
+enstrophie moyenne
+spectre temporel de vorticité derrière le cylindre
+présence d’un pic de shedding
+énergie low-k de densité
+std(N)
+out-band
+débit moyen
+dérive thermique
+```
+
+Question physique centrale :
+
+```text
+Q9 réduit-il les modes de densité sans effacer la dynamique vorticitaires ?
 ```
 
 ---
@@ -1183,3 +1324,20 @@ Marche / step-channel :
 ```
 
 Le cas cylindre/von Kármán n’a pas encore pu être stabilisé en run long. Il est mis en pause, car il teste simultanément la projection Q9, le traitement solide/fluide, le contrôle de débit et une géométrie courbe sous-résolue.
+```
+
+Elle est validée sur Poiseuille 30000 steps avec :
+
+```text
+densité locale comparable à Q6
+low-k density energy réduite d’environ 4.3x
+profil Poiseuille stable
+R2 ≈ 0.956
+```
+
+La prochaine validation doit porter sur :
+
+```text
+1. piston : comportement quasi-incompressible / liquide
+2. cylindre von Kármán : préservation des structures fines et de la vorticité
+```

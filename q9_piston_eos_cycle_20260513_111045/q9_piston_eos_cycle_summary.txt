@@ -1,0 +1,86 @@
+=== Q9 piston EOS cycle ===
+seed                              : 11
+Np                                : 10240
+steps/sampleEvery                 : 50000 / 100
+grid, gamma                       : 32 x 16, 20
+compression target                : 0.05
+cycle C/H/D/H steps               : 20000 / 5000 / 20000 / 5000
+dt, kBT, alphaDeg                 : 0.001, 1, 90
+
+--- Q9 parameters ---
+projectionStrength                : 1
+massFluxProjectionMode            : relax_to_uniform_lowk
+massFluxDensityRelaxationBeta     : 0.002
+massFluxFinalVelocityProjectionCleanup : 1
+massFluxFinalVelocityProjectionStrength : 0.5
+massFluxLowKMaxIndex              : 2
+
+--- Pressure definitions ---
+Pkin              = mean_cell(rho_cell * kBT_cell)
+Pwall             = impulse_on_top_wall_y / (Delta_t_sample * Lx)
+PexcessWallKinetic= Pwall - Pkin
+PprojectionWorkRaw= -Delta E_projection_raw / Delta V, only during ramps
+
+--- Phase summary ---
+
+phase: compression
+nSamples                         : 200
+mean rho/rho0                    : 1.02599747795
+mean compression                 : 0.025125
+mean Pkin                        : 5529.16887271
+mean Pwall                       : 5041.27109337
+mean PexcessWallKinetic          : -488.97380198
+mean PprojectionWorkRaw          : -1546.51728845
+Keff wall fit                    : 6924.28225915
+Keff kinetic fit                 : 5618.83199529
+Keff excess fit                  : 1423.77459352
+mean std(N)                      : 3.5707418355
+mean low-k proxy                 : 0.000317425347053
+
+phase: hold_compressed
+nSamples                         : 50
+mean rho/rho0                    : 1.05263157895
+mean compression                 : 0.05
+mean Pkin                        : 5673.15940008
+mean Pwall                       : 5178.30520453
+mean PexcessWallKinetic          : -494.854195555
+mean PprojectionWorkRaw          : 9.37111317314
+Keff wall fit                    : NaN
+Keff kinetic fit                 : NaN
+Keff excess fit                  : NaN
+mean std(N)                      : 3.6586309695
+mean low-k proxy                 : 0.000346012647527
+
+phase: decompression
+nSamples                         : 200
+mean rho/rho0                    : 1.02573432006
+mean compression                 : 0.024875
+mean Pkin                        : 5528.73485841
+mean Pwall                       : 4941.73836315
+mean PexcessWallKinetic          : -586.996495264
+mean PprojectionWorkRaw          : 1545.74637869
+Keff wall fit                    : 3511.77519545
+Keff kinetic fit                 : 5513.84585278
+Keff excess fit                  : -2002.07065733
+mean std(N)                      : 3.58912028043
+mean low-k proxy                 : 0.000330680805055
+
+phase: hold_relaxed
+nSamples                         : 50
+mean rho/rho0                    : 1
+mean compression                 : 0
+mean Pkin                        : 5390.21693796
+mean Pwall                       : 4808.47604693
+mean PexcessWallKinetic          : -581.740891038
+mean PprojectionWorkRaw          : 1539.13027455
+Keff wall fit                    : NaN
+Keff kinetic fit                 : NaN
+Keff excess fit                  : NaN
+mean std(N)                      : 3.60775324739
+mean low-k proxy                 : 0.000328465084695
+
+--- Files ---
+q9_piston_eos_cycle_20260513_111045\q9_piston_eos_cycle.mat
+q9_piston_eos_cycle_20260513_111045\q9_piston_eos_cycle_timeseries.csv
+q9_piston_eos_cycle_20260513_111045\q9_piston_eos_cycle_summary.csv
+q9_piston_eos_cycle_20260513_111045\q9_piston_eos_cycle_summary.txt

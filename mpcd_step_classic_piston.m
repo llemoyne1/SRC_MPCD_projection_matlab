@@ -144,6 +144,10 @@ wallSigma = get_param(params, 'wallSigma', sqrt(max(get_param(params, 'kBT', 1.0
 
 info = struct('nBot', 0, 'nTop', 0, 'dEwall', 0, ...
               'dPxBot', 0, 'dPxTop', 0, 'dPyBot', 0, 'dPyTop', 0, ...
+              'dPxBotSigned', 0, 'dPxTopSigned', 0, ...
+              'dPyBotSigned', 0, 'dPyTopSigned', 0, ...
+              'impulseOnBottomWallY', 0, 'impulseOnTopWallY', 0, ...
+              'pressureBottomWall', NaN, 'pressureTopWall', NaN, ...
               'yTop', yTop, 'Up', Up);
 
 for pass = 1:8
@@ -167,8 +171,11 @@ for pass = 1:8
         dv = v(ids, :) - vOld;
         info.nBot = info.nBot + numel(ids);
         info.dEwall = info.dEwall + 0.5 * sum(sum(v(ids, :).^2 - vOld.^2, 2));
-        info.dPxBot = info.dPxBot + sum(dv(:, 1));
+        info.dPxBot = info.dPxBot + sum(abs(dv(:, 1)));
         info.dPyBot = info.dPyBot + sum(abs(dv(:, 2)));
+        info.dPxBotSigned = info.dPxBotSigned + sum(dv(:, 1));
+        info.dPyBotSigned = info.dPyBotSigned + sum(dv(:, 2));
+        info.impulseOnBottomWallY = info.impulseOnBottomWallY - sum(dv(:, 2));
     end
 
     hitT = x(:, 2) > yTop;
@@ -191,8 +198,11 @@ for pass = 1:8
         dv = v(ids, :) - vOld;
         info.nTop = info.nTop + numel(ids);
         info.dEwall = info.dEwall + 0.5 * sum(sum(v(ids, :).^2 - vOld.^2, 2));
-        info.dPxTop = info.dPxTop + sum(dv(:, 1));
+        info.dPxTop = info.dPxTop + sum(abs(dv(:, 1)));
         info.dPyTop = info.dPyTop + sum(abs(dv(:, 2)));
+        info.dPxTopSigned = info.dPxTopSigned + sum(dv(:, 1));
+        info.dPyTopSigned = info.dPyTopSigned + sum(dv(:, 2));
+        info.impulseOnTopWallY = info.impulseOnTopWallY - sum(dv(:, 2));
     end
 
     if ~any(hitB) && ~any(hitT)
@@ -201,6 +211,15 @@ for pass = 1:8
 end
 
 x(:, 2) = min(max(x(:, 2), 0), max(yTop - eps(yTop), 0));
+
+% Instantaneous wall pressures averaged over this MPCD step.
+% pressureTopWall is positive when the fluid exerts an upward force on the
+% piston. The impulse convention is the impulse received by the wall, i.e.
+% minus the particle momentum change. In 2D the wall area is the box length Lx.
+LxLocal = get_param(params, 'Lx', 1.0);
+dtLocal = get_param(params, 'dt', 1.0);
+info.pressureTopWall = info.impulseOnTopWallY / max(dtLocal * LxLocal, eps);
+info.pressureBottomWall = info.impulseOnBottomWallY / max(dtLocal * LxLocal, eps);
 end
 
 function validate_state(state)

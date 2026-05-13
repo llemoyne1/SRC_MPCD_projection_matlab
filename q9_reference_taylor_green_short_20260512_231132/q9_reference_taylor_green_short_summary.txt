@@ -1,0 +1,74 @@
+=== Q9 reference Taylor-Green short: Q6 vs Q9 ===
+seed                              : 11
+steps/sampleEvery                 : 500 / 25
+grid, gamma                       : 32 x 32, 20
+initialPopulationMode             : exact_per_cell
+TG amplitude/mode                 : 0.3 / (1,1)
+dt, kBT, alphaDeg                 : 0.002, 0.01, 90
+
+--- Q9 parameters ---
+projectionStrength                : 1
+massFluxProjectionMode            : relax_to_uniform_lowk
+massFluxProjectionStrength        : 1
+massFluxDensityRelaxationBeta     : 0.002
+massFluxApplyAfterVelocityProjection : 1
+massFluxFinalVelocityProjectionCleanup : 1
+massFluxFinalVelocityProjectionStrength : 0.5
+massFluxTargetFilter              : lowpass_fft
+massFluxLowKMaxIndex              : 2
+
+--- Summary table ---
+
+method: Q6_projection
+actual last step / stopped early  : 500 / 0
+mean std(N)                       : 3.24773809616
+mean out-band                     : 0.17322358631
+mean low-k density energy         : 9.38326666085e-06
+time-avg rel RMS                  : 0.101104600728
+mean div(u) after particles       : 1.19490552264e-15
+mean mass-flux residual           : NaN
+mean mass-flux after particles    : NaN
+mean/final TG amplitude           : 0.0936460896777 / 0.0146490447159
+amplitude retention               : 0.0488674730853
+mean/final TG mode energy         : 0.00391200221116 / 5.3648627772e-05
+mode energy retention             : 0.00238802992574
+mean/final TG coherence           : 0.699146381401 / 0.1964144883
+mean/final enstrophy              : 1.61870313575 / 1.21564371771
+mean/final high-k vel fraction    : 0.232910741159 / 0.612313437326
+mean/final kBT cell               : 0.01829899711 / 0.0105167042769
+
+method: Q9_lowk_mass_flux
+actual last step / stopped early  : 500 / 0
+mean std(N)                       : 3.2259454337
+mean out-band                     : 0.174339657738
+mean low-k density energy         : 6.63110949024e-06
+time-avg rel RMS                  : 0.0995952694011
+mean div(u) after particles       : 0.00320513420949
+mean mass-flux residual           : 9.3401749782e-16
+mean mass-flux after particles    : 0.0422196933279
+mean/final TG amplitude           : 0.0949925823604 / 0.014872449452
+amplitude retention               : 0.0496127247477
+mean/final TG mode energy         : 0.00395666907988 / 5.52974381752e-05
+mode energy retention             : 0.00246142245689
+mean/final TG coherence           : 0.714429202404 / 0.203834068219
+mean/final enstrophy              : 1.60228062303 / 1.18840757015
+mean/final high-k vel fraction    : 0.219497012688 / 0.599542252275
+mean/final kBT cell               : 0.0184296644667 / 0.0105292365249
+
+--- Ratios Q9/Q6 ---
+std(N)                            : 0.993289895362
+out-band                          : 1.00644295302
+low-k density energy              : 0.706695197943
+div(u) after particles            : 2.68233274411e+12
+final TG amplitude                : 1.01525046448
+amplitude retention               : 1.01525046448
+final TG mode energy              : 1.03073350562
+mode energy retention             : 1.03073350562
+final TG coherence                : 1.03777511518
+final enstrophy                   : 0.977595287858
+final high-k vel fraction         : 0.979142732673
+
+--- Files ---
+q9_reference_taylor_green_short_20260512_231132\q9_reference_taylor_green_short.mat
+q9_reference_taylor_green_short_20260512_231132\q9_reference_taylor_green_short_summary.csv
+q9_reference_taylor_green_short_20260512_231132\q9_reference_taylor_green_short_summary.txt

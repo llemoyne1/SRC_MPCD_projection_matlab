@@ -38,25 +38,32 @@ yMin = get_param(params, 'pistonYMin', 0.9 * Ly0);
 vy = get_param(params, 'pistonVy', 0.0);
 dt = params.dt;
 stopOnMin = logical(get_param(params, 'pistonStopOnMin', true));
+motionMode = lower(char(string(get_param(params, 'pistonMotionMode', 'linear'))));
 
-if isfield(state, 'piston') && isfield(state.piston, 'yTop') && ~isempty(state.piston.yTop)
-    yPrev = state.piston.yTop;
+if strcmp(motionMode, 'cycle') || strcmp(motionMode, 'compression_hold_decompression')
+    [yPrev, yTop, up, phaseName, phaseIndex] = piston_cycle_kinematics(params, stepIndex, Ly0, y0, yMin, dt);
 else
-    yPrev = y0 + max(stepIndex - 1, 0) * dt * vy;
-end
-
-yTop = y0 + stepIndex * dt * vy;
-if stopOnMin
-    if vy < 0
-        yTop = max(yMin, yTop);
-    elseif vy > 0
-        yTop = min(yMin, yTop);
+    if isfield(state, 'piston') && isfield(state.piston, 'yTop') && ~isempty(state.piston.yTop)
+        yPrev = state.piston.yTop;
+    else
+        yPrev = y0 + max(stepIndex - 1, 0) * dt * vy;
     end
-end
 
-up = vy;
-if stopOnMin && ((vy < 0 && yTop <= yMin + eps(Ly0)) || (vy > 0 && yTop >= yMin - eps(Ly0)))
-    up = 0.0;
+    yTop = y0 + stepIndex * dt * vy;
+    if stopOnMin
+        if vy < 0
+            yTop = max(yMin, yTop);
+        elseif vy > 0
+            yTop = min(yMin, yTop);
+        end
+    end
+
+    up = vy;
+    if stopOnMin && ((vy < 0 && yTop <= yMin + eps(Ly0)) || (vy > 0 && yTop >= yMin - eps(Ly0)))
+        up = 0.0;
+    end
+    phaseName = 'linear';
+    phaseIndex = 1;
 end
 
 yTop = min(max(yTop, eps(Ly0)), Ly0);
@@ -79,9 +86,66 @@ info.activeHeight = yTop;
 info.compression = 1.0 - yTop / Ly0;
 info.stepIndex = stepIndex;
 info.t = stepIndex * dt;
+info.motionMode = motionMode;
+info.phase = phaseName;
+info.phaseIndex = phaseIndex;
+info.dV = p.Lx * (yTop - yPrev);
+info.dVdt = info.dV / max(dt, eps);
 info.activeArea = p.Lx * yTop;
 info.rhoPhysicalMean = size(state.x, 1) / max(info.activeArea, eps);
 info.gammaMeanGeometric = size(state.x, 1) / max(p.Nx * p.Ny, 1);
+end
+
+
+function [yPrev, yTop, up, phaseName, phaseIndex] = piston_cycle_kinematics(params, stepIndex, Ly0, y0, yMin, dt)
+%PISTON_CYCLE_KINEMATICS Slow compression-hold-decompression cycle.
+% The profile is defined at integer step indices. yPrev corresponds to
+% stepIndex-1 and yTop to stepIndex, so Up=(yTop-yPrev)/dt is exact for the
+% piecewise-linear ramp used during compression/decompression.
+
+nC = max(1, round(get_param(params, 'pistonCycleCompressSteps', get_param(params, 'pistonCompressSteps', 10000))));
+nH = max(0, round(get_param(params, 'pistonCycleHoldSteps', get_param(params, 'pistonHoldSteps', 0))));
+nD = max(1, round(get_param(params, 'pistonCycleDecompressSteps', get_param(params, 'pistonDecompressSteps', nC))));
+nF = max(0, round(get_param(params, 'pistonCycleFinalHoldSteps', get_param(params, 'pistonFinalHoldSteps', 0))));
+
+k0 = max(stepIndex - 1, 0);
+k1 = max(stepIndex, 0);
+yPrev = cycle_position(k0, y0, yMin, nC, nH, nD, nF);
+yTop = cycle_position(k1, y0, yMin, nC, nH, nD, nF);
+up = (yTop - yPrev) / max(dt, eps);
+[phaseName, phaseIndex] = cycle_phase(k1, nC, nH, nD, nF);
+
+% Numerical guard.
+yPrev = min(max(yPrev, eps(Ly0)), Ly0);
+yTop = min(max(yTop, eps(Ly0)), Ly0);
+end
+
+function y = cycle_position(k, y0, yMin, nC, nH, nD, nF)
+if k <= nC
+    y = y0 + (yMin - y0) * (k / max(nC, 1));
+elseif k <= nC + nH
+    y = yMin;
+elseif k <= nC + nH + nD
+    q = (k - nC - nH) / max(nD, 1);
+    y = yMin + (y0 - yMin) * q;
+else
+    %#ok<NASGU> nF is kept to document the intended profile length.
+    y = y0;
+end
+end
+
+function [name, idx] = cycle_phase(k, nC, nH, nD, nF)
+if k <= nC
+    name = 'compression'; idx = 1;
+elseif k <= nC + nH
+    name = 'hold_compressed'; idx = 2;
+elseif k <= nC + nH + nD
+    name = 'decompression'; idx = 3;
+elseif k <= nC + nH + nD + nF
+    name = 'hold_relaxed'; idx = 4;
+else
+    name = 'done'; idx = 5;
+end
 end
 
 function value = get_param(params, name, defaultValue)

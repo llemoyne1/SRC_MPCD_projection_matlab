@@ -1,0 +1,60 @@
+=== Q9 reference Taylor-Green short: Q6 vs Q9 ===
+
+=== Taylor-Green comparison: Q6 projection-only vs Q9 low-k mass flux ===
+
+--- Running Q6 Taylor-Green ---
+
+=== run_projection_taylor_green_demo ===
+Np                         : 20480
+initialPopulationMode      : exact_per_cell
+grid                       : 32 x 32
+steps completed            : 500 / 500 in 18.10 s
+TG amplitude/mode          : 0.3 / (1,1)
+projectionStrength         : 1
+massFluxProjectionMode     : off  strength=1  beta=0
+cleanup strength           : 0
+mean std(N)                : 3.24773809616
+mean low-k density energy  : 9.38326666085e-06
+mean div(u) particle after : 1.19490552264e-15
+mean mass-flux residual    : NaN
+mean/final TG amplitude    : 0.0936460896777 / 0.0146490447159
+mean/final TG coherence    : 0.699146381401 / 0.1964144883
+mean/final enstrophy       : 1.61870313575 / 1.21564371771
+mean high-k vel fraction   : 0.232910741159
+
+--- Running Q9 Taylor-Green ---
+
+=== run_projection_taylor_green_demo ===
+Np                         : 20480
+initialPopulationMode      : exact_per_cell
+grid                       : 32 x 32
+steps completed            : 500 / 500 in 18.95 s
+TG amplitude/mode          : 0.3 / (1,1)
+projectionStrength         : 1
+massFluxProjectionMode     : relax_to_uniform_lowk  strength=1  beta=0.002
+cleanup strength           : 0.5
+mean std(N)                : 3.2259454337
+mean low-k density energy  : 6.63110949024e-06
+mean div(u) particle after : 0.00320513420949
+mean mass-flux residual    : 9.3401749782e-16
+mean/final TG amplitude    : 0.0949925823604 / 0.014872449452
+mean/final TG coherence    : 0.714429202404 / 0.203834068219
+mean/final enstrophy       : 1.60228062303 / 1.18840757015
+mean high-k vel fraction   : 0.219497012688
+
+--- Taylor-Green Q6/Q9 summary ---
+          <strong>method</strong>           <strong>nSteps</strong>    <strong>seed</strong>    <strong>actualLastStep</strong>    <strong>stoppedEarly</strong>    <strong>Nx</strong>    <strong>Ny</strong>    <strong>gamma</strong>    <strong>initialAmplitude</strong>    <strong>modeX</strong>    <strong>modeY</strong>    <strong>meanStdN</strong>    <strong>meanOutBand</strong>     <strong>meanLowK</strong>     <strong>timeAvgRelRms</strong>    <strong>meanDivUAfterParticles</strong>    <strong>meanMassFluxResidual</strong>    <strong>meanMassFluxAfterParticles</strong>    <strong>meanTGAmplitude</strong>    <strong>finalTGAmplitude</strong>    <strong>amplitudeRetention</strong>    <strong>meanTGModeEnergy</strong>    <strong>finalTGModeEnergy</strong>    <strong>modeEnergyRetention</strong>    <strong>meanTGCoherence</strong>    <strong>finalTGCoherence</strong>    <strong>meanEnstrophy</strong>    <strong>finalEnstrophy</strong>    <strong>meanHighKVelocityFraction</strong>    <strong>finalHighKVelocityFraction</strong>    <strong>meanKBTCell</strong>    <strong>finalKBTCell</strong>    <strong>ratio_meanStdN_vs_Q6</strong>    <strong>ratio_meanOutBand_vs_Q6</strong>    <strong>ratio_meanLowK_vs_Q6</strong>    <strong>ratio_timeAvgRelRms_vs_Q6</strong>    <strong>ratio_meanDivUAfterParticles_vs_Q6</strong>    <strong>ratio_meanTGAmplitude_vs_Q6</strong>    <strong>ratio_finalTGAmplitude_vs_Q6</strong>    <strong>ratio_amplitudeRetention_vs_Q6</strong>    <strong>ratio_meanTGModeEnergy_vs_Q6</strong>    <strong>ratio_finalTGModeEnergy_vs_Q6</strong>    <strong>ratio_modeEnergyRetention_vs_Q6</strong>    <strong>ratio_meanTGCoherence_vs_Q6</strong>    <strong>ratio_finalTGCoherence_vs_Q6</strong>    <strong>ratio_meanEnstrophy_vs_Q6</strong>    <strong>ratio_finalEnstrophy_vs_Q6</strong>    <strong>ratio_meanHighKVelocityFraction_vs_Q6</strong>    <strong>ratio_finalHighKVelocityFraction_vs_Q6</strong>    <strong>ratio_meanKBTCell_vs_Q6</strong>
+    <strong>___________________</strong>    <strong>______</strong>    <strong>____</strong>    <strong>______________</strong>    <strong>____________</strong>    <strong>__</strong>    <strong>__</strong>    <strong>_____</strong>    <strong>________________</strong>    <strong>_____</strong>    <strong>_____</strong>    <strong>________</strong>    <strong>___________</strong>    <strong>__________</strong>    <strong>_____________</strong>    <strong>______________________</strong>    <strong>____________________</strong>    <strong>__________________________</strong>    <strong>_______________</strong>    <strong>________________</strong>    <strong>__________________</strong>    <strong>________________</strong>    <strong>_________________</strong>    <strong>___________________</strong>    <strong>_______________</strong>    <strong>________________</strong>    <strong>_____________</strong>    <strong>______________</strong>    <strong>_________________________</strong>    <strong>__________________________</strong>    <strong>___________</strong>    <strong>____________</strong>    <strong>____________________</strong>    <strong>_______________________</strong>    <strong>____________________</strong>    <strong>_________________________</strong>    <strong>__________________________________</strong>    <strong>___________________________</strong>    <strong>____________________________</strong>    <strong>______________________________</strong>    <strong>____________________________</strong>    <strong>_____________________________</strong>    <strong>_______________________________</strong>    <strong>___________________________</strong>    <strong>____________________________</strong>    <strong>_________________________</strong>    <strong>__________________________</strong>    <strong>_____________________________________</strong>    <strong>______________________________________</strong>    <strong>_______________________</strong>
+
+    "Q6_projection"         500       11          500             false        32    32     20            0.3             1        1       3.2477       0.17322      9.3833e-06        0.1011             1.1949e-15                      NaN                      NaN                 0.093646            0.014649             0.048867             0.003912           5.3649e-05              0.002388             0.69915            0.19641            1.6187            1.2156                 0.23291                      0.61231               0.018299        0.010517                  1                        1                         1                          1                                  1                               1                               1                                1                                1                               1                                 1                                1                               1                              1                            1                                   1                                        1                                 1         
+    "Q9_lowk_mass_flux"     500       11          500             false        32    32     20            0.3             1        1       3.2259       0.17434      6.6311e-06      0.099595              0.0032051               9.3402e-16                  0.04222                 0.094993            0.014872             0.049613            0.0039567           5.5297e-05             0.0024614             0.71443            0.20383            1.6023            1.1884                  0.2195                      0.59954                0.01843        0.010529            0.99329                   1.0064                    0.7067                    0.98507                         2.6823e+12                          1.0144                          1.0153                           1.0153                           1.0114                          1.0307                            1.0307                           1.0219                          1.0378                        0.98985                       0.9776                             0.94241                                  0.97914                            1.0071         
+
+
+Summary written to:
+q9_reference_taylor_green_short_20260512_231132\q9_reference_taylor_green_short_summary.txt
+CSV written to:
+q9_reference_taylor_green_short_20260512_231132\q9_reference_taylor_green_short_summary.csv
+MAT written to:
+q9_reference_taylor_green_short_20260512_231132\q9_reference_taylor_green_short.mat
+close all
+clear

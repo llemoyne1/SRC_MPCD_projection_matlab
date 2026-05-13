@@ -20,9 +20,26 @@ clear functions
 close all
 % clc
 
+%% === Preset / user override mechanism ===
+% Optional usage before calling this script:
+%   pistonEosCyclePreset = 'long';
+%   pistonEosUserParams = struct('pistonCompressionTarget',0.08);
+%   run_q9_piston_eos_cycle
+if ~exist('pistonEosCyclePreset', 'var') || isempty(pistonEosCyclePreset)
+    pistonEosCyclePreset = 'standard';
+end
+pistonEosCyclePreset = lower(char(string(pistonEosCyclePreset)));
+if ~exist('pistonEosOutputPrefix', 'var') || isempty(pistonEosOutputPrefix)
+    if strcmp(pistonEosCyclePreset, 'long')
+        pistonEosOutputPrefix = 'q9_piston_eos_cycle_long';
+    else
+        pistonEosOutputPrefix = 'q9_piston_eos_cycle';
+    end
+end
+
 %% === Output folder ===
 tag = datestr(now, 'yyyymmdd_HHMMSS');
-outputDir = ['q9_piston_eos_cycle_' tag];
+outputDir = [char(string(pistonEosOutputPrefix)) '_' tag];
 if ~exist(outputDir, 'dir')
     mkdir(outputDir);
 end
@@ -58,15 +75,29 @@ params.pistonCompressionTarget = 0.05;
 params.pistonYMin = params.pistonY0 * (1.0 - params.pistonCompressionTarget);
 
 % Default cycle: slow enough to be close to quasi-static, but still usable in MATLAB.
-params.pistonCycleCompressSteps = 20000;
-params.pistonCycleHoldSteps = 5000;
-params.pistonCycleDecompressSteps = 20000;
-params.pistonCycleFinalHoldSteps = 5000;
+% The 'long' preset doubles the ramp/hold duration and reduces output rate.
+switch pistonEosCyclePreset
+    case 'standard'
+        params.pistonCycleCompressSteps = 20000;
+        params.pistonCycleHoldSteps = 5000;
+        params.pistonCycleDecompressSteps = 20000;
+        params.pistonCycleFinalHoldSteps = 5000;
+        params.sampleEvery = 100;
+        params.progressEvery = 1000;
+    case 'long'
+        params.pistonCycleCompressSteps = 50000;
+        params.pistonCycleHoldSteps = 15000;
+        params.pistonCycleDecompressSteps = 50000;
+        params.pistonCycleFinalHoldSteps = 15000;
+        params.sampleEvery = 200;
+        params.progressEvery = 2000;
+    otherwise
+        error('Unknown pistonEosCyclePreset: %s', pistonEosCyclePreset);
+end
+
 params.nSteps = params.pistonCycleCompressSteps + params.pistonCycleHoldSteps + ...
     params.pistonCycleDecompressSteps + params.pistonCycleFinalHoldSteps;
 
-params.sampleEvery = 100;
-params.progressEvery = 1000;
 params.maxWallClockSeconds = Inf;
 params.pistonStopOnMin = true;
 params.pistonAffineReposition = true;
@@ -105,7 +136,23 @@ params.storeDensityMaps = false;
 params.densityBandFraction = 0.20;
 params.lowKMaxIndex = 2;
 params.smoothWindowSamples = 21;
+params.holdDiscardFractionForBaseline = 0.50;
+params.holdDiscardFractionForPlateau = 0.50;
+params.rampFitDiscardFraction = 0.05;
+params.hysteresisGridPoints = 100;
 params.makeFigures = true;
+
+if strcmp(pistonEosCyclePreset, 'long')
+    params.smoothWindowSamples = 31;
+end
+
+% User overrides are applied last. This allows quick tests without editing
+% this reference script.
+if exist('pistonEosUserParams', 'var') && isstruct(pistonEosUserParams)
+    params = merge_struct(params, pistonEosUserParams);
+    params.nSteps = params.pistonCycleCompressSteps + params.pistonCycleHoldSteps + ...
+        params.pistonCycleDecompressSteps + params.pistonCycleFinalHoldSteps;
+end
 
 %% === Initialization ===
 rng(params.seed);
@@ -170,7 +217,9 @@ elapsedScript = toc(wallClock);
 rows = rows(1:isamp);
 T = struct2table(rows);
 T = add_smoothed_pressures(T, params.smoothWindowSamples);
-summary = summarize_eos_table(T, params, actualLastStep, elapsedScript);
+baseline = compute_eos_baseline(T, params);
+T = add_relative_pressures(T, baseline);
+[summary, plateauSummary, hysteresisSummary] = summarize_eos_table(T, params, baseline, actualLastStep, elapsedScript);
 
 %% === Save ===
 matFile = fullfile(outputDir, 'q9_piston_eos_cycle.mat');
@@ -178,10 +227,14 @@ csvFile = fullfile(outputDir, 'q9_piston_eos_cycle_timeseries.csv');
 summaryCsvFile = fullfile(outputDir, 'q9_piston_eos_cycle_summary.csv');
 txtFile = fullfile(outputDir, 'q9_piston_eos_cycle_summary.txt');
 
-save(matFile, 'params', 'initInfo', 'T', 'summary', '-v7.3');
+save(matFile, 'params', 'initInfo', 'T', 'summary', 'plateauSummary', 'hysteresisSummary', 'baseline', '-v7.3');
 writetable(T, csvFile);
 writetable(summary, summaryCsvFile);
-write_summary_text(txtFile, params, initInfo, summary, matFile, csvFile, summaryCsvFile, txtFile);
+plateauCsvFile = fullfile(outputDir, 'q9_piston_eos_cycle_plateau_summary.csv');
+hysteresisCsvFile = fullfile(outputDir, 'q9_piston_eos_cycle_hysteresis_summary.csv');
+writetable(plateauSummary, plateauCsvFile);
+writetable(hysteresisSummary, hysteresisCsvFile);
+write_summary_text(txtFile, params, initInfo, summary, plateauSummary, hysteresisSummary, baseline, matFile, csvFile, summaryCsvFile, plateauCsvFile, hysteresisCsvFile, txtFile);
 
 fprintf('\nTimeseries written to:\n%s\n', csvFile);
 fprintf('Summary written to:\n%s\n', txtFile);
@@ -211,6 +264,11 @@ row.Pwall = NaN;
 row.PexcessWallKinetic = NaN;
 row.PprojectionWorkRaw = NaN;
 row.PprojectionWorkThermostatted = NaN;
+row.PkinRel = NaN;
+row.PwallRel = NaN;
+row.PexcessRel = NaN;
+row.PprojectionWorkRawRel = NaN;
+row.rhoRatioRel = NaN;
 row.wallImpulseTopY = NaN;
 row.wallHitsTop = NaN;
 row.dVInterval = NaN;
@@ -336,12 +394,72 @@ T.PprojectionWorkRawSmooth = movmean(T.PprojectionWorkRaw, w, 'omitnan');
 T.PprojectionWorkThermostattedSmooth = movmean(T.PprojectionWorkThermostatted, w, 'omitnan');
 end
 
-function summary = summarize_eos_table(T, params, actualLastStep, elapsedScript)
+function baseline = compute_eos_baseline(T, params)
+% Baseline used to remove the systematic offset between wall pressure and
+% kinetic pressure.  Prefer the final relaxed hold after discarding its
+% initial transient; fall back to the initial sample if the phase is absent.
+idx = phase_core_mask(T, "hold_relaxed", get_param(params, 'holdDiscardFractionForBaseline', 0.50));
+if nnz(idx) < 3
+    idx = T.step <= min(T.step) + max(1, get_param(params, 'sampleEvery', 1));
+end
+baseline = struct();
+baseline.phase = "hold_relaxed";
+baseline.nSamples = nnz(idx);
+baseline.rhoRatio = mean(T.rhoRatio(idx), 'omitnan');
+baseline.Pkin = mean(T.PkinSmooth(idx), 'omitnan');
+baseline.Pwall = mean(T.PwallSmooth(idx), 'omitnan');
+baseline.Pexcess = mean(T.PexcessWallKineticSmooth(idx), 'omitnan');
+baseline.PprojectionWorkRaw = mean(T.PprojectionWorkRawSmooth(idx), 'omitnan');
+if ~isfinite(baseline.rhoRatio)
+    baseline.rhoRatio = 1.0;
+end
+end
+
+function T = add_relative_pressures(T, baseline)
+T.rhoRatioRel = T.rhoRatio - baseline.rhoRatio;
+T.PkinRel = T.PkinSmooth - baseline.Pkin;
+T.PwallRel = T.PwallSmooth - baseline.Pwall;
+T.PexcessRel = T.PexcessWallKineticSmooth - baseline.Pexcess;
+T.PprojectionWorkRawRel = T.PprojectionWorkRawSmooth - baseline.PprojectionWorkRaw;
+end
+
+function idx = phase_core_mask(T, phaseName, discardFraction)
+idxAll = find(T.phase == phaseName);
+idx = false(height(T), 1);
+if isempty(idxAll)
+    return;
+end
+discardFraction = min(max(discardFraction, 0), 0.95);
+nDiscard = floor(discardFraction * numel(idxAll));
+keep = idxAll((nDiscard+1):end);
+idx(keep) = true;
+end
+
+function idx = ramp_fit_mask(T, phaseName, discardFraction)
+idxAll = find(T.phase == phaseName);
+idx = false(height(T), 1);
+if isempty(idxAll)
+    return;
+end
+discardFraction = min(max(discardFraction, 0), 0.45);
+n = numel(idxAll);
+i0 = floor(discardFraction*n) + 1;
+i1 = n - floor(discardFraction*n);
+if i1 >= i0
+    idx(idxAll(i0:i1)) = true;
+end
+end
+
+function [summary, plateauSummary, hysteresisSummary] = summarize_eos_table(T, params, baseline, actualLastStep, elapsedScript)
 phases = ["compression"; "hold_compressed"; "decompression"; "hold_relaxed"];
 summary = table();
 for i = 1:numel(phases)
     ph = phases(i);
-    idx = T.phase == ph;
+    if ph == "compression" || ph == "decompression"
+        idx = ramp_fit_mask(T, ph, get_param(params, 'rampFitDiscardFraction', 0.05));
+    else
+        idx = phase_core_mask(T, ph, get_param(params, 'holdDiscardFractionForPlateau', 0.50));
+    end
     idx = idx & isfinite(T.rhoMean) & isfinite(T.PwallSmooth);
     S = table();
     S.phase = ph;
@@ -349,10 +467,14 @@ for i = 1:numel(phases)
     S.actualLastStep = actualLastStep;
     S.elapsedScript = elapsedScript;
     S.meanRhoRatio = mean(T.rhoRatio(idx), 'omitnan');
+    S.meanRhoRatioRel = mean(T.rhoRatioRel(idx), 'omitnan');
     S.meanCompression = mean(T.compression(idx), 'omitnan');
     S.meanPkin = mean(T.PkinSmooth(idx), 'omitnan');
     S.meanPwall = mean(T.PwallSmooth(idx), 'omitnan');
     S.meanPexcessWallKinetic = mean(T.PexcessWallKineticSmooth(idx), 'omitnan');
+    S.meanPkinRel = mean(T.PkinRel(idx), 'omitnan');
+    S.meanPwallRel = mean(T.PwallRel(idx), 'omitnan');
+    S.meanPexcessRel = mean(T.PexcessRel(idx), 'omitnan');
     S.meanPprojectionWorkRaw = mean(T.PprojectionWorkRawSmooth(idx), 'omitnan');
     S.meanStdN = mean(T.stdN(idx), 'omitnan');
     S.meanLowKProxy = mean(T.lowKProxy(idx), 'omitnan');
@@ -361,11 +483,114 @@ for i = 1:numel(phases)
     S.KeffWallFit = fit_keff(T.rhoMean(idx), T.PwallSmooth(idx));
     S.KeffKineticFit = fit_keff(T.rhoMean(idx), T.PkinSmooth(idx));
     S.KeffExcessFit = fit_keff(T.rhoMean(idx), T.PexcessWallKineticSmooth(idx));
+    S.KeffWallRelFit = fit_keff_ratio(T.rhoRatio(idx), T.PwallRel(idx));
+    S.KeffKineticRelFit = fit_keff_ratio(T.rhoRatio(idx), T.PkinRel(idx));
+    S.KeffExcessRelFit = fit_keff_ratio(T.rhoRatio(idx), T.PexcessRel(idx));
     summary = [summary; S]; %#ok<AGROW>
 end
 summary.beta = repmat(params.massFluxDensityRelaxationBeta, height(summary), 1);
 summary.lowKMaxIndex = repmat(params.massFluxLowKMaxIndex, height(summary), 1);
 summary.cleanupStrength = repmat(params.massFluxFinalVelocityProjectionStrength, height(summary), 1);
+summary.baselineRhoRatio = repmat(baseline.rhoRatio, height(summary), 1);
+summary.baselinePkin = repmat(baseline.Pkin, height(summary), 1);
+summary.baselinePwall = repmat(baseline.Pwall, height(summary), 1);
+summary.baselinePexcess = repmat(baseline.Pexcess, height(summary), 1);
+
+plateauSummary = compute_plateau_summary(summary, baseline);
+hysteresisSummary = compute_hysteresis_summary(T, params);
+end
+
+function plateauSummary = compute_plateau_summary(summary, baseline)
+plateauSummary = table();
+idxC = summary.phase == "hold_compressed";
+idxR = summary.phase == "hold_relaxed";
+if nnz(idxC) ~= 1 || nnz(idxR) ~= 1
+    return;
+end
+C = summary(idxC,:);
+R = summary(idxR,:);
+dr = C.meanRhoRatio - R.meanRhoRatio;
+rbar = 0.5 * (C.meanRhoRatio + R.meanRhoRatio);
+S = table();
+S.baselinePhase = string(baseline.phase);
+S.baselineSamples = baseline.nSamples;
+S.relaxedRhoRatio = R.meanRhoRatio;
+S.compressedRhoRatio = C.meanRhoRatio;
+S.deltaRhoRatio = dr;
+S.relaxedPkin = R.meanPkin;
+S.compressedPkin = C.meanPkin;
+S.deltaPkin = C.meanPkin - R.meanPkin;
+S.relaxedPwall = R.meanPwall;
+S.compressedPwall = C.meanPwall;
+S.deltaPwall = C.meanPwall - R.meanPwall;
+S.relaxedPexcess = R.meanPexcessWallKinetic;
+S.compressedPexcess = C.meanPexcessWallKinetic;
+S.deltaPexcess = C.meanPexcessWallKinetic - R.meanPexcessWallKinetic;
+if abs(dr) > eps
+    S.KeffKineticPlateau = rbar * S.deltaPkin / dr;
+    S.KeffWallPlateau = rbar * S.deltaPwall / dr;
+    S.KeffExcessPlateau = rbar * S.deltaPexcess / dr;
+else
+    S.KeffKineticPlateau = NaN;
+    S.KeffWallPlateau = NaN;
+    S.KeffExcessPlateau = NaN;
+end
+S.deltaStdN = C.meanStdN - R.meanStdN;
+S.deltaLowKProxy = C.meanLowKProxy - R.meanLowKProxy;
+plateauSummary = S;
+end
+
+function H = compute_hysteresis_summary(T, params)
+pressureCols = ["PkinRel", "PwallRel", "PexcessRel"];
+H = table();
+for k = 1:numel(pressureCols)
+    col = pressureCols(k);
+    S = branch_hysteresis_one(T, col, get_param(params, 'hysteresisGridPoints', 100));
+    S.pressure = col;
+    H = [H; S]; %#ok<AGROW>
+end
+end
+
+function S = branch_hysteresis_one(T, col, nGrid)
+S = table();
+idxC = T.phase == "compression" & isfinite(T.rhoRatio) & isfinite(T.(col));
+idxD = T.phase == "decompression" & isfinite(T.rhoRatio) & isfinite(T.(col));
+S.nCompression = nnz(idxC);
+S.nDecompression = nnz(idxD);
+S.rhoMinCommon = NaN;
+S.rhoMaxCommon = NaN;
+S.meanAbsDifference = NaN;
+S.rmsDifference = NaN;
+S.maxAbsDifference = NaN;
+S.signedAreaDifference = NaN;
+if nnz(idxC) < 5 || nnz(idxD) < 5
+    return;
+end
+Y = T.(col);
+[rC, pC] = unique_sorted(T.rhoRatio(idxC), Y(idxC));
+[rD, pD] = unique_sorted(T.rhoRatio(idxD), Y(idxD));
+r0 = max(min(rC), min(rD));
+r1 = min(max(rC), max(rD));
+if ~(isfinite(r0) && isfinite(r1) && r1 > r0)
+    return;
+end
+rq = linspace(r0, r1, max(20, round(nGrid))).';
+pCq = interp1(rC, pC, rq, 'linear');
+pDq = interp1(rD, pD, rq, 'linear');
+dp = pCq - pDq;
+S.rhoMinCommon = r0;
+S.rhoMaxCommon = r1;
+S.meanAbsDifference = mean(abs(dp), 'omitnan');
+S.rmsDifference = sqrt(mean(dp.^2, 'omitnan'));
+S.maxAbsDifference = max(abs(dp));
+S.signedAreaDifference = trapz(rq, dp);
+end
+
+function [xu, yu] = unique_sorted(x, y)
+[xs, order] = sort(x(:));
+ys = y(order);
+[xu, ~, ic] = unique(xs);
+yu = accumarray(ic, ys, [], @mean);
 end
 
 function K = fit_keff(rho, P)
@@ -381,7 +606,21 @@ rhoBar = mean(rho, 'omitnan');
 K = rhoBar * coef(1);
 end
 
-function write_summary_text(filename, params, initInfo, summary, matFile, csvFile, summaryCsvFile, txtFile)
+
+function K = fit_keff_ratio(rhoRatio, P)
+mask = isfinite(rhoRatio) & isfinite(P);
+rhoRatio = rhoRatio(mask);
+P = P(mask);
+if numel(rhoRatio) < 5 || max(rhoRatio) - min(rhoRatio) <= 10*eps(max(abs(rhoRatio)))
+    K = NaN;
+    return;
+end
+coef = polyfit(rhoRatio, P, 1);
+rbar = mean(rhoRatio, 'omitnan');
+K = rbar * coef(1);
+end
+
+function write_summary_text(filename, params, initInfo, summary, plateauSummary, hysteresisSummary, baseline, matFile, csvFile, summaryCsvFile, plateauCsvFile, hysteresisCsvFile, txtFile)
 fid = fopen(filename, 'w');
 fprintf(fid, '=== Q9 piston EOS cycle ===\n');
 fprintf(fid, 'seed                              : %d\n', params.seed);
@@ -405,53 +644,135 @@ fprintf(fid, 'Pkin              = mean_cell(rho_cell * kBT_cell)\n');
 fprintf(fid, 'Pwall             = impulse_on_top_wall_y / (Delta_t_sample * Lx)\n');
 fprintf(fid, 'PexcessWallKinetic= Pwall - Pkin\n');
 fprintf(fid, 'PprojectionWorkRaw= -Delta E_projection_raw / Delta V, only during ramps\n');
+fprintf(fid, 'Relative pressures are baseline-subtracted using the final relaxed hold.\n');
+fprintf(fid, '\n--- Relative-pressure baseline ---\n');
+fprintf(fid, 'baseline phase                    : %s\n', char(baseline.phase));
+fprintf(fid, 'baseline samples                  : %d\n', baseline.nSamples);
+fprintf(fid, 'baseline rho/rho0                 : %.12g\n', baseline.rhoRatio);
+fprintf(fid, 'baseline Pkin                     : %.12g\n', baseline.Pkin);
+fprintf(fid, 'baseline Pwall                    : %.12g\n', baseline.Pwall);
+fprintf(fid, 'baseline Pexcess                  : %.12g\n', baseline.Pexcess);
 fprintf(fid, '\n--- Phase summary ---\n');
 for i = 1:height(summary)
     fprintf(fid, '\nphase: %s\n', char(summary.phase(i)));
     fprintf(fid, 'nSamples                         : %d\n', summary.nSamples(i));
     fprintf(fid, 'mean rho/rho0                    : %.12g\n', summary.meanRhoRatio(i));
+    fprintf(fid, 'mean rho/rho0 relative           : %.12g\n', summary.meanRhoRatioRel(i));
     fprintf(fid, 'mean compression                 : %.12g\n', summary.meanCompression(i));
     fprintf(fid, 'mean Pkin                        : %.12g\n', summary.meanPkin(i));
     fprintf(fid, 'mean Pwall                       : %.12g\n', summary.meanPwall(i));
     fprintf(fid, 'mean PexcessWallKinetic          : %.12g\n', summary.meanPexcessWallKinetic(i));
+    fprintf(fid, 'mean relative Pkin               : %.12g\n', summary.meanPkinRel(i));
+    fprintf(fid, 'mean relative Pwall              : %.12g\n', summary.meanPwallRel(i));
+    fprintf(fid, 'mean relative Pexcess            : %.12g\n', summary.meanPexcessRel(i));
     fprintf(fid, 'mean PprojectionWorkRaw          : %.12g\n', summary.meanPprojectionWorkRaw(i));
     fprintf(fid, 'Keff wall fit                    : %.12g\n', summary.KeffWallFit(i));
     fprintf(fid, 'Keff kinetic fit                 : %.12g\n', summary.KeffKineticFit(i));
     fprintf(fid, 'Keff excess fit                  : %.12g\n', summary.KeffExcessFit(i));
+    fprintf(fid, 'Keff wall relative fit           : %.12g\n', summary.KeffWallRelFit(i));
+    fprintf(fid, 'Keff kinetic relative fit        : %.12g\n', summary.KeffKineticRelFit(i));
+    fprintf(fid, 'Keff excess relative fit         : %.12g\n', summary.KeffExcessRelFit(i));
     fprintf(fid, 'mean std(N)                      : %.12g\n', summary.meanStdN(i));
     fprintf(fid, 'mean low-k proxy                 : %.12g\n', summary.meanLowKProxy(i));
+end
+if ~isempty(plateauSummary)
+    fprintf(fid, '\n--- Plateau EOS estimate: compressed hold minus relaxed hold ---\n');
+    fprintf(fid, 'delta rho/rho0                   : %.12g\n', plateauSummary.deltaRhoRatio(1));
+    fprintf(fid, 'delta Pkin                       : %.12g\n', plateauSummary.deltaPkin(1));
+    fprintf(fid, 'delta Pwall                      : %.12g\n', plateauSummary.deltaPwall(1));
+    fprintf(fid, 'delta Pexcess                    : %.12g\n', plateauSummary.deltaPexcess(1));
+    fprintf(fid, 'Keff kinetic plateau             : %.12g\n', plateauSummary.KeffKineticPlateau(1));
+    fprintf(fid, 'Keff wall plateau                : %.12g\n', plateauSummary.KeffWallPlateau(1));
+    fprintf(fid, 'Keff excess plateau              : %.12g\n', plateauSummary.KeffExcessPlateau(1));
+end
+if ~isempty(hysteresisSummary)
+    fprintf(fid, '\n--- Branch hysteresis diagnostics ---\n');
+    for i = 1:height(hysteresisSummary)
+        fprintf(fid, '%s meanAbs/rms/max/area           : %.12g / %.12g / %.12g / %.12g\n', ...
+            char(hysteresisSummary.pressure(i)), hysteresisSummary.meanAbsDifference(i), ...
+            hysteresisSummary.rmsDifference(i), hysteresisSummary.maxAbsDifference(i), ...
+            hysteresisSummary.signedAreaDifference(i));
+    end
 end
 fprintf(fid, '\n--- Files ---\n');
 fprintf(fid, '%s\n', matFile);
 fprintf(fid, '%s\n', csvFile);
 fprintf(fid, '%s\n', summaryCsvFile);
+fprintf(fid, '%s\n', plateauCsvFile);
+fprintf(fid, '%s\n', hysteresisCsvFile);
 fprintf(fid, '%s\n', txtFile);
 fclose(fid);
 end
 
-function make_eos_figures(T, summary, outputDir)
-fig1 = figure('Name', 'Piston EOS cycle: pressure versus density');
+function make_eos_figures(T, summary, plateauSummary, hysteresisSummary, baseline, outputDir)
+fig1 = figure('Name', 'Piston EOS cycle: absolute pressure versus density');
 hold on; grid on;
 plot(T.rhoRatio, T.PkinSmooth, '-', 'DisplayName', 'Pkin');
 plot(T.rhoRatio, T.PwallSmooth, '-', 'DisplayName', 'Pwall');
 plot(T.rhoRatio, T.PexcessWallKineticSmooth, '-', 'DisplayName', 'Pwall-Pkin');
 xlabel('\rho / \rho_0'); ylabel('pressure-like quantity'); legend('Location', 'best');
-title('Effective EOS diagnostics');
+title('Effective EOS diagnostics: absolute pressures');
 saveas(fig1, fullfile(outputDir, 'piston_eos_pressure_vs_density.png'));
 
+fig1b = figure('Name', 'Piston EOS cycle: relative pressure versus density');
+tiledlayout(1,2);
+nexttile; hold on; grid on;
+idxC = T.phase == "compression";
+idxD = T.phase == "decompression";
+idxHC = T.phase == "hold_compressed";
+idxHR = T.phase == "hold_relaxed";
+plot(T.rhoRatio(idxC), T.PwallRel(idxC), '-', 'DisplayName', 'Pwall comp.');
+plot(T.rhoRatio(idxD), T.PwallRel(idxD), '-', 'DisplayName', 'Pwall decomp.');
+plot(T.rhoRatio(idxHC), T.PwallRel(idxHC), '.', 'DisplayName', 'compressed hold');
+plot(T.rhoRatio(idxHR), T.PwallRel(idxHR), '.', 'DisplayName', 'relaxed hold');
+xlabel('\rho / \rho_0'); ylabel('\Delta P_{wall}'); legend('Location', 'best');
+title('Wall-pressure EOS branch');
+nexttile; hold on; grid on;
+plot(T.rhoRatio, T.PkinRel, '-', 'DisplayName', '\Delta Pkin');
+plot(T.rhoRatio, T.PwallRel, '-', 'DisplayName', '\Delta Pwall');
+plot(T.rhoRatio, T.PexcessRel, '-', 'DisplayName', '\Delta(Pwall-Pkin)');
+xlabel('\rho / \rho_0'); ylabel('baseline-subtracted pressure'); legend('Location', 'best');
+title('Relative pressure components');
+saveas(fig1b, fullfile(outputDir, 'piston_eos_relative_pressure_vs_density.png'));
+
 fig2 = figure('Name', 'Piston EOS cycle: time series');
-tiledlayout(4,1);
+tiledlayout(5,1);
 nexttile; plot(T.t, T.compression, '-'); grid on; ylabel('compression');
 nexttile; plot(T.t, T.PkinSmooth, '-', T.t, T.PwallSmooth, '-'); grid on; ylabel('P'); legend('Pkin','Pwall');
+nexttile; plot(T.t, T.PkinRel, '-', T.t, T.PwallRel, '-', T.t, T.PexcessRel, '-'); grid on; ylabel('\Delta P'); legend('\DeltaPkin','\DeltaPwall','\DeltaPexcess');
 nexttile; plot(T.t, T.PexcessWallKineticSmooth, '-'); grid on; ylabel('Pwall-Pkin');
 nexttile; plot(T.t, T.stdN, '-', T.t, T.lowKProxy, '-'); grid on; ylabel('density diag'); xlabel('t'); legend('stdN','low-k proxy');
 saveas(fig2, fullfile(outputDir, 'piston_eos_timeseries.png'));
 
 fig3 = figure('Name', 'Piston EOS cycle: fitted Keff');
-bar(categorical(summary.phase), [summary.KeffKineticFit, summary.KeffWallFit, summary.KeffExcessFit]);
-grid on; ylabel('K_{eff} fit'); legend('kinetic','wall','excess','Location','best');
+bar(categorical(summary.phase), [summary.KeffKineticRelFit, summary.KeffWallRelFit, summary.KeffExcessRelFit]);
+grid on; ylabel('K_{eff} fit'); legend('kinetic rel.','wall rel.','excess rel.','Location','best');
 title('Phase-wise effective compressibility modulus');
 saveas(fig3, fullfile(outputDir, 'piston_eos_keff_summary.png'));
+
+if ~isempty(plateauSummary)
+    fig4 = figure('Name', 'Piston EOS cycle: plateau Keff');
+    bar(categorical({'plateau'}), [plateauSummary.KeffKineticPlateau, plateauSummary.KeffWallPlateau, plateauSummary.KeffExcessPlateau]);
+    grid on; ylabel('K_{eff} plateau'); legend('kinetic','wall','excess','Location','best');
+    title('Quasi-static plateau EOS estimate');
+    saveas(fig4, fullfile(outputDir, 'piston_eos_plateau_keff.png'));
+end
+
+if ~isempty(hysteresisSummary)
+    fig5 = figure('Name', 'Piston EOS cycle: hysteresis summary');
+    bar(categorical(hysteresisSummary.pressure), [hysteresisSummary.meanAbsDifference, hysteresisSummary.rmsDifference]);
+    grid on; ylabel('pressure difference'); legend('mean |comp-decomp|','rms','Location','best');
+    title('Compression/decompression hysteresis');
+    saveas(fig5, fullfile(outputDir, 'piston_eos_hysteresis_summary.png'));
+end
+end
+
+function out = merge_struct(base, override)
+out = base;
+fn = fieldnames(override);
+for i = 1:numel(fn)
+    out.(fn{i}) = override.(fn{i});
+end
 end
 
 function T = local_temperature_map(x, v, params)
@@ -529,6 +850,14 @@ if nargin < 3
 end
 if isstruct(s) && isfield(s, name) && ~isempty(s.(name))
     value = s.(name);
+else
+    value = defaultValue;
+end
+end
+
+function value = get_param(params, name, defaultValue)
+if isfield(params, name) && ~isempty(params.(name))
+    value = params.(name);
 else
     value = defaultValue;
 end

@@ -27,3 +27,8 @@ GIT_STATUS.txt
 # OS metadata
 .DS_Store
 Thumbs.db
+
+/q9_*_20*/
+/q9_reference_*_20*/
+/console_log.txt
+*.mat

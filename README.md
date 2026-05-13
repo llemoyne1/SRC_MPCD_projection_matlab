@@ -14,8 +14,7 @@ Validation acquise :
   - Poiseuille 30000 steps
   - piston quasi-incompressible 30000 steps
   - Taylor-Green vortex court 500 steps
-Validation en cours :
-  - marche / step-channel
+  - marche / step-channel 10000 steps
 Validation non stabilisée à ce stade :
   - cylindre / von Kármán long
 ```
@@ -414,7 +413,7 @@ ou un domaine plus adapté avant de pouvoir mesurer Re/St.
 
 ---
 
-### 4.5 Marche / step-channel — en cours
+### 4.5 Marche / step-channel 10000 steps — validé
 
 Le cas marche est introduit comme test intermédiaire plus robuste que le cylindre :
 
@@ -445,41 +444,71 @@ vorticité localisée
 zone de wake derrière une discontinuité géométrique
 ```
 
-Diagnostics recommandés :
+Configuration validée :
 
 ```text
-mean std(N)
-mean out-band
-mean low-k density energy
-time-avg rel RMS
-mean rho transport
-mean div(u) after particles
-mean enstrophy
-shear omega RMS
-recirculation length
-recirculation area
-probe omega RMS
-probe Uy RMS
-mean step hits
+Nx = 48
+Ny = 24
+gamma = 20
+seed = 11
+initialPopulationMode = exact_per_fluid_cell
+nSteps = 10000
+sampleEvery = 50
+initialMeanVelocityX = 0.04
+meanFlowControlMode = relax_to_target
+targetMeanVelocityX = 0.04
+meanFlowRelaxationTau = 0.5
+dt = 0.001
+kBT = 0.02
+alphaDeg = 90
+step x0/x1/height = 0.3 / 0.7 / 0.25
+stepWallMode = bounceback
 ```
 
-Critères de validation attendus :
+Paramètres Q9 validés pour ce cas :
+
+```matlab
+params.projectionStrength = 1.0;
+params.massFluxProjectionMode = 'relax_to_uniform_lowk';
+params.massFluxProjectionStrength = 1.0;
+params.massFluxDensityRelaxationBeta = 5e-4;
+params.massFluxApplyAfterVelocityProjection = true;
+params.massFluxTargetFilter = 'lowpass_fft';
+params.massFluxLowKMaxIndex = 2;
+params.massFluxFinalVelocityProjectionCleanup = true;
+params.massFluxFinalVelocityProjectionStrength = 0.5;
+```
+
+Résultat long de référence :
+
+| Métrique | Q9 | Q6 projection seule | Ratio Q9/Q6 |
+|---|---:|---:|---:|
+| mean std(N) | 3.08693 | 3.11508 | 0.9910 |
+| mean out-band | 0.14474 | 0.14816 | 0.9769 |
+| mean low-k density energy | 1.19140e-5 | 1.81760e-5 | 0.6555 |
+| time-avg rel RMS | 0.06258 | 0.06177 | 1.0132 |
+| mean rho transport | 2.78117e-3 | 2.77753e-3 | 1.0013 |
+| mean div(u) after particles | 1.73360e-2 | 2.06486e-2 | 0.8396 |
+| mean enstrophy | 0.20414 | 0.19811 | 1.0304 |
+| mean shear omega RMS | 0.63974 | 0.64253 | 0.9957 |
+| mean recirculation length | 0.98024 | 0.97900 | 1.0013 |
+| mean recirculation area | 0.12968 | 0.12370 | 1.0483 |
+| probe omega RMS | 0.57106 | 0.59820 | 0.9546 |
+| probe Uy RMS | 0.01761 | 0.01732 | 1.0166 |
+
+Conclusion :
 
 ```text
-low-k Q9/Q6 < 1
-enstrophy Q9/Q6 proche de 1
-shear omega RMS Q9/Q6 proche de 1
-recirculation length Q9/Q6 proche de 1
-recirculation area Q9/Q6 proche de 1
-pas d’arrêt prématuré
-pas de dérive forte de Ux
+Step-channel Q9 long validé :
+- stabilité jusqu’à 10000 steps ;
+- low-k density energy réduite d’environ 34.5 % ;
+- std(N), out-band et div(u) meilleurs que Q6 ;
+- transport de densité quasi inchangé ;
+- couche de cisaillement et recirculation conservées ;
+- aucune destruction visible des structures séparées.
 ```
 
-Statut :
-
-```text
-Test en cours.
-```
+Cette validation complète Taylor-Green : Q9 préserve non seulement un vortex lisse, mais aussi une structure de séparation/recirculation générée par une géométrie alignée grille.
 
 ---
 
@@ -492,7 +521,7 @@ Test en cours.
 | `run_q9_reference_lowk_mass_flux_30000.m` | Script de référence Q9 validé, Poiseuille 30000 steps |
 | `run_q9_reference_piston.m` | Script de référence piston Q9, runs courts ou longs |
 | `run_q9_reference_taylor_green_short.m` | Script de référence Taylor-Green Q6/Q9 |
-| `run_q9_reference_step_short.m` | Script de référence marche / step-channel, en cours |
+| `run_q9_reference_step_short.m` | Script de référence marche / step-channel validé ; peut être renommé en version long |
 | `run_q9_reference_vonkarman_short.m` | Script cylindre/von Kármán court ; non stabilisé en long |
 | `run_q9_vonkarman_re_st_sweep.m` | Sweep exploratoire Q9-only pour Re/St ; non validé à ce stade |
 | `run_compare_density_projection_lowk_mass_flux_poiseuille.m` | Comparaison classic / Q6 projection / Q9 low-k mass-flux |
@@ -999,22 +1028,21 @@ ajouter des métriques sur fenêtre cohérente ;
 
 ### Étape 5 — Marche / step-channel
 
-Statut : en cours.
+Statut : validé en run long 10000 steps.
 
-Objectif :
+Conclusion :
 
 ```text
-Tester séparation, recirculation et couche de cisaillement
-avec une géométrie alignée grille moins instable que le cylindre.
+Q9 préserve la séparation, la recirculation et la couche de cisaillement,
+tout en réduisant le low-k densitaire et la divergence reconstruite.
 ```
 
-Critères :
+Travail futur :
 
 ```text
-stabilité temporelle ;
-recirculation conservée ;
-vorticité et enstrophie cohérentes ;
-low-k Q9/Q6 réduit.
+renommer les scripts/sorties `short` en référence générique ou `long` ;
+ajouter éventuellement un sweep de graines ;
+conserver ce cas comme benchmark de non-destruction des structures séparées.
 ```
 
 ---
@@ -1035,6 +1063,39 @@ Condition de reprise :
 ```text
 stabiliser le traitement obstacle/projection/contrôle
 ou disposer d’un domaine mieux adapté.
+```
+
+---
+### Étape 7 — Passage vers C++ / parallélisation
+
+Statut : recommandé après gel des validations MATLAB actuelles.
+
+Les validations MATLAB disponibles couvrent maintenant quatre niveaux complémentaires :
+
+```text
+Poiseuille    : profil moyen et viscosité effective.
+Piston        : quasi-incompressibilité sous compression.
+Taylor-Green  : préservation d’un vortex lisse.
+Marche        : préservation d’une séparation/recirculation alignée grille.
+```
+
+Avant de passer en C++, une petite passe intermédiaire est recommandée :
+
+```text
+1. figer les scripts de référence et les paramètres ;
+2. renommer les scripts/sorties `short` devenus des références longues ;
+3. ajouter un petit tableau de benchmarks dans le README ;
+4. éventuellement lancer un sweep de quelques graines sur Taylor-Green et marche ;
+5. isoler clairement les briques Q9 canal/périodique pour faciliter le portage.
+```
+
+Le passage C++ devient pertinent pour traiter des cas plus résolus, en particulier :
+
+```text
+marche plus longue ou plus résolue ;
+obstacle carré aligné grille ;
+cylindre avec meilleure résolution ;
+éventuellement projection fluide/solide masquée.
 ```
 
 ---
@@ -1113,13 +1174,12 @@ Taylor-Green :
   structure vorticitiaire lisse préservée,
   low-k density energy réduite d’environ 29 %,
   amplitude/cohérence du mode non dégradées.
+
+Marche / step-channel :
+  séparation, recirculation et couche de cisaillement conservées,
+  low-k density energy réduite d’environ 34.5 %,
+  divergence reconstruite améliorée,
+  run long 10000 steps stable.
 ```
 
 Le cas cylindre/von Kármán n’a pas encore pu être stabilisé en run long. Il est mis en pause, car il teste simultanément la projection Q9, le traitement solide/fluide, le contrôle de débit et une géométrie courbe sous-résolue.
-
-La validation en cours est le cas marche / step-channel :
-
-```text
-objectif : séparation, recirculation, couche de cisaillement,
-avec géométrie alignée grille et diagnostics de structures.
-```

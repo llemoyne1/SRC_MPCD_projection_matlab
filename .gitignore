@@ -32,3 +32,7 @@ Thumbs.db
 /q9_reference_*_20*/
 /console_log.txt
 *.mat
+q9*/
+*.asv
+*.mat
+*.zip

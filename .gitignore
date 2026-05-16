@@ -36,3 +36,13 @@ q9*/
 *.asv
 *.mat
 *.zip
+
+# Generated run outputs
+q9_*/
+*.mat
+*.asv
+forced_tg_*_timeseries.csv
+forced_tg_summary.csv
+forced_tg_summary.txt
+forced_tg_timeseries.png
+forced_tg_viscosity_fit.png

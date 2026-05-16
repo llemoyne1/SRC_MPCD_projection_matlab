@@ -2,7 +2,7 @@
 
 Prototype MATLAB minimal pour la validation d’une méthode SRC/MPCD quasi-incompressible par projection de vitesse et projection low-k du flux de masse.
 
-Cette branche est volontairement centrée sur un cas test unique et propre : le vortex de Taylor–Green forcé en domaine entièrement périodique. Elle sert à figer une base Q6/Q9 bulk-only corrigée, avec thermostat commun, correction globale exacte de quantité de mouvement, visualisation et fit de viscosité effective.
+Cette branche est volontairement centrée sur un cas test unique et propre : le vortex de Taylor–Green forcé en domaine entièrement périodique. Elle sert à figer une base **bulk-only** Q6/Q9 corrigée, avec thermostat commun, diagnostic thermique corrigé, correction globale exacte de quantité de mouvement, visualisation et estimation de viscosité effective.
 
 ```text
 Branche recommandée : q9-mass-flux-projection-momentum-correction-parallel
@@ -32,7 +32,7 @@ La correction Q9 agit en plus sur le flux de masse discret :
 M = N u,
 ```
 
-avec `N` l’occupation particulaire cellulaire et `u` la vitesse moyenne cellulaire. L’objectif est de réduire les grandes longueurs d’onde de densité en corrigeant préférentiellement les modes low-k de :
+où `N` est l’occupation particulaire cellulaire et `u` la vitesse moyenne cellulaire. L’objectif est de réduire les grandes longueurs d’onde de densité en corrigeant préférentiellement les modes low-k de :
 
 ```math
 \nabla \cdot (N u).
@@ -152,7 +152,7 @@ Dans le run de référence, le résidu corrigé est de l’ordre de la précisio
 
 ## 4. Thermostat commun et diagnostic thermique corrigé
 
-Le cas Taylor–Green forcé utilise un thermostat cellulaire commun aux trois méthodes. La comparaison CLASSIC/Q6/Q9 serait biaisée si le thermostat n’était appliqué qu’après projection.
+Le cas Taylor–Green forcé utilise un thermostat cellulaire commun aux trois méthodes. La comparaison CLASSIC/Q6/Q9 serait biaisée si le thermostat n’était appliqué qu’à certaines méthodes.
 
 Ordre final retenu :
 
@@ -176,9 +176,11 @@ ce qui conserve la quantité de mouvement de chaque cellule à l’arrondi près
 
 Le diagnostic thermique a été corrigé pour utiliser la même convention d’indexation cellulaire que le thermostat. Le champ suivi `kBT cell` correspond maintenant correctement à la température imposée.
 
+Ce point est important : les conclusions quantitatives obtenues avant cette correction, notamment sur la viscosité effective, la réponse mécanique au piston et les essais de surface libre, doivent être considérées comme provisoires tant qu’elles n’ont pas été réauditées avec ce noyau corrigé.
+
 ---
 
-## 5. Cas test : Taylor–Green forcé périodique
+## 5. Cas test validant : Taylor–Green forcé périodique
 
 Le cas validant est un vortex de Taylor–Green forcé en domaine périodique 2D.
 
@@ -202,7 +204,7 @@ f_x = F \sin(k_x x) \cos(k_y y),
 f_y = -F \frac{k_x}{k_y} \cos(k_x x) \sin(k_y y).
 ```
 
-Le cas est intéressant parce que la structure tourbillonnaire attendue est connue et mesurable. La validation ne repose donc pas seulement sur des diagnostics indirects comme une longueur de recirculation.
+Le cas est intéressant parce que la structure tourbillonnaire attendue est connue et mesurable. La validation ne repose donc pas seulement sur des diagnostics indirects comme une longueur de recirculation ou un signal pariétal bruité.
 
 Diagnostics principaux :
 
@@ -237,19 +239,20 @@ Q6
 Q9
 ```
 
-Configuration de référence :
+Configuration de référence recommandée pour un run court mais discriminant :
 
 ```text
 Nx = Ny = 64
 gamma = 20
-nSteps = 10000
+nSteps = 5000
 sampleEvery = 100
 visualEvery = 250
 dt = 0.001
 kBT = 0.01
 TG initial amplitude = 0.10
-TG force amplitude   = 0.08
+TG force amplitude   = 0.12
 TG mode              = (1,1)
+Q9 beta/lowK/cleanup = 5e-4 / 2 / 0.5
 ```
 
 Le run génère un dossier de sortie du type :
@@ -330,22 +333,22 @@ nuEffFitPlateau
 viscosityFitR2
 ```
 
-Le fit est surtout interprétable lorsque l’amplitude atteint une fenêtre quasi stationnaire ou suit une relaxation exponentielle suffisamment nette. Dans le run de référence, les différentes estimations donnent des viscosités effectives cohérentes entre CLASSIC, Q6 et Q9.
+Le fit est surtout interprétable lorsque l’amplitude atteint une fenêtre quasi stationnaire ou suit une relaxation exponentielle suffisamment nette. Pour les runs courts proches du plateau, les estimateurs `knownF` et `plateau` sont plus robustes que le fit libre de `F`.
 
 ---
 
 ## 9. Résultat de référence actuel
 
-Run validant :
+Run validant recommandé :
 
 ```text
 methods = CLASSIC, Q6, Q9
 Nx = Ny = 64
 gamma = 20
-nSteps = 10000
+nSteps = 5000
 dt = 0.001
 kBT = 0.01
-TG initial/force amplitude = 0.10 / 0.08
+TG initial/force amplitude = 0.10 / 0.12
 Q9 beta/lowK/cleanup = 5e-4 / 2 / 0.5
 ```
 
@@ -353,26 +356,26 @@ Synthèse :
 
 | Métrique | CLASSIC | Q6 | Q9 |
 |---|---:|---:|---:|
-| final amplitude | 0.05294 | 0.04916 | 0.05046 |
-| final coherence | 0.557 | 0.739 | 0.755 |
-| final high-k fraction | 0.358 | 0.203 | 0.188 |
-| final low-k density | 5.40e-3 | 5.83e-6 | 5.24e-7 |
-| mean density rel RMS | 0.241 | 0.166 | 0.164 |
+| final amplitude | 0.07855 | 0.07271 | 0.07379 |
+| final coherence | 0.735 | 0.856 | 0.865 |
+| final high-k fraction | 0.212 | 0.111 | 0.107 |
+| final low-k density | 1.740e-2 | 1.203e-6 | 2.148e-7 |
+| mean density rel RMS | 0.266 | 0.167 | 0.167 |
 | final kBT cell | 0.010 | 0.010 | 0.010 |
-| nu_eff fit preferred | 0.01916 | 0.02058 | 0.02045 |
-| mean raw momentum kick / particle | NaN | 4.51e-5 | 3.83e-5 |
-| mean residual momentum kick / particle | NaN | 8.12e-19 | 1.77e-18 |
+| nu_eff fit preferred | 0.01933 | 0.02098 | 0.02108 |
+| mean raw momentum kick / particle | NaN | 3.59e-5 | 4.74e-5 |
+| mean residual momentum kick / particle | NaN | 7.21e-19 | 1.79e-18 |
 
 Lecture :
 
 ```text
-CLASSIC conserve légèrement plus d’amplitude brute,
-mais avec beaucoup plus de bruit high-k et de modes compressifs low-k.
+CLASSIC conserve une amplitude brute plus élevée,
+mais accumule fortement des modes compressifs low-k.
 
 Q6 améliore fortement la cohérence modale et réduit les modes compressifs.
 
 Q9 donne le meilleur contrôle de densité low-k,
-la meilleure cohérence finale,
+une cohérence finale légèrement supérieure à Q6,
 et une viscosité effective très proche de Q6.
 ```
 
@@ -443,53 +446,53 @@ forced_tg_viscosity_fit.png
 
 ---
 
-## 12. Limites actuelles
+## 12. Statut des anciens cas tests
 
-Cette branche ne prétend pas valider tous les écoulements SRC/MPCD possibles.
+Cette branche fige uniquement le noyau validé sur Taylor–Green forcé. Les autres cas test historiques ne sont pas inclus et ne doivent pas être utilisés comme preuve de validation dans cette branche.
 
-Limites assumées :
+À cause des corrections récentes sur le thermostat et le diagnostic thermique, les conclusions quantitatives antérieures doivent être reclassées ainsi :
 
-```text
-pas de surface libre,
-pas de contact liquide/air,
-pas de piston,
-pas d’obstacle solide courbe,
-pas de von Kármán,
-pas de validation locale complète du moment q = rho u.
-```
+| Cas historique | Statut recommandé |
+|---|---|
+| Poiseuille | probablement robuste qualitativement, mais `nu_eff` et bilans thermiques à réauditer |
+| Piston / EOS | à réauditer prioritairement avec thermostat et diagnostics corrigés |
+| Marche / step-channel | intéressant qualitativement, mais non inclus dans la branche minimale |
+| Cylindre / von Kármán | non validé en MATLAB actuel ; à reprendre en version plus résolue |
+| Surface libre / Q10 | non validé ; conclusions antérieures provisoires |
+| Dam-break / inclined layer / surface leveling | exploratoire ; à reprendre seulement après audit piston/EOS |
 
-La correction de quantité de mouvement actuelle est globale. Elle empêche toute dérive du moment total due à la projection, mais ne garantit pas encore une reconstruction locale conservative de :
-
-```math
-q = \rho u.
-```
-
-Une étape ultérieure devra ajouter des diagnostics locaux de `delta(rho u)` et éventuellement une reconstruction conservative locale du champ de moment.
+La réponse piston et les essais de surface libre sont les deux points les plus sensibles, car ils dépendent directement de la température effective, de la pression cinétique, de la viscosité effective et des échanges de quantité de mouvement.
 
 ---
 
-## 13. Prochaines étapes recommandées
+## 13. Suite recommandée
 
-1. Confirmer le run Taylor–Green forcé avec quelques amplitudes de forcing :
+Il n’est pas nécessaire de multiplier les cas Taylor–Green à ce stade. Le cas forcé périodique a rempli son rôle : valider un noyau bulk Q6/Q9 propre.
 
-```text
-tgForceAmplitude = 0.04, 0.08, 0.12, 0.16
-```
-
-2. Vérifier la stabilité de `nu_eff` estimé.
-
-3. Ajouter des diagnostics locaux du moment :
+La suite logique est un audit ciblé, dans cet ordre :
 
 ```text
-Delta q_c = (N u)_after_projection - (N u)_before_projection
-spectre de Delta q
-norme RMS bulk
-corrélation avec grad(phi)
+1. Geler cette branche TG comme base minimale propre.
+2. Créer une branche séparée pour réaudit piston/EOS avec le noyau thermostat corrigé.
+3. Reprendre seulement ensuite les cas surface libre/Q10.
+4. Éviter de mélanger dans une même branche : bulk périodique, piston, parois, surface libre et interface.
+5. Porter le noyau Q9 bulk vers C++/OpenMP lorsque l’API MATLAB est figée.
 ```
 
-4. Seulement ensuite, reprendre des cas plus complexes : dipôle vortex, Kelvin–Helmholtz, marche raffinée, cylindre.
+Pour le réaudit piston, les diagnostics indispensables seront :
 
-5. Porter la méthode Q9 bulk vers C++/OpenMP lorsque la branche MATLAB minimale est figée.
+```text
+kBT cell avant/après thermostat,
+Pkin,
+Pwall,
+Pexcess = Pwall - Pkin,
+nu_eff ou indicateur de dissipation,
+low-k density,
+correction globale de moment,
+bilan énergétique.
+```
+
+Pour la surface libre, les anciens résultats ne doivent pas être interprétés comme une validation ou une invalidation définitive de Q9/Q10. Ils indiquent surtout que le couplage interface/bulk/contact paroi doit être repris sur un noyau thermique et mécanique propre.
 
 ---
 
@@ -501,9 +504,12 @@ Cette branche fournit un état propre et minimal de la méthode Q9 :
 projection div(u),
 projection low-k du flux de masse N u,
 thermostat commun corrigé,
+diagnostic thermique corrigé,
 correction globale exacte de quantité de mouvement,
 visualisation des structures,
 fit de viscosité effective.
 ```
 
 Le cas Taylor–Green forcé montre que Q9 réduit les modes compressifs de densité de plusieurs ordres de grandeur tout en conservant une structure tourbillonnaire organisée. La méthode modifie légèrement la viscosité effective, mais ce comportement est mesurable, stable et compatible avec l’interprétation de Q9 comme fluide SRC/MPCD quasi-incompressible effectif.
+
+La priorité suivante n’est donc plus d’ajouter des variantes Taylor–Green, mais de réauditer les cas sensibles — en particulier piston/EOS et surface libre — avec le noyau thermostat/correction de moment désormais corrigé.

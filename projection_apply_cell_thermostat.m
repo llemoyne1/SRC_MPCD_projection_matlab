@@ -1,13 +1,28 @@
 function [vOut, info] = projection_apply_cell_thermostat(x, v, params, varargin)
 %PROJECTION_APPLY_CELL_THERMOSTAT Momentum-preserving local thermostat.
 %
-%   [vOut, info] = projection_apply_cell_thermostat(x, v, params)
+%   [vOut, info] = projection_apply_cell_thermostat(x, v, params, ...)
 %
-% For each populated grid cell, rescales the particle velocity fluctuations
+% For each populated grid cell, rescales particle velocity fluctuations
 % around the cell mean velocity:
-%      v_i = U_cell + s_cell * (v_i - U_cell)
-% This preserves the cell momentum exactly and therefore does not change the
-% deposited hydrodynamic velocity field when nearest-cell assignment is used.
+%      v_i <- U_cell + s_cell * (v_i - U_cell)
+%
+% This preserves the cell momentum exactly up to roundoff.  This version is
+% vectorized using accumarray and is intended to replace the legacy loop
+% implementation that performed a costly find(ids==c) for every cell.
+%
+% Supported options:
+%   'periodicX'     true/false
+%   'periodicY'     true/false
+%   'targetKBT'     scalar
+%   'strength'      scalar in [0,1] usually
+%   'minParticles'  minimum population per cell
+%   'maxScale'      bound on thermostat rescale factor
+%
+% Notes:
+% - The operation is local to each cell.
+% - The hydrodynamic cell velocity is preserved.
+% - The global momentum is therefore also preserved, up to roundoff.
 
 if nargin < 3
     error('Usage: [vOut, info] = projection_apply_cell_thermostat(x, v, params, ...)');
@@ -20,6 +35,7 @@ strength = get_param(params, 'thermostatStrength', 1.0);
 minParticles = get_param(params, 'thermostatMinParticlesPerCell', 2);
 maxScale = get_param(params, 'thermostatMaxScale', 10.0);
 minKBT = get_param(params, 'thermostatMinKBT', 1e-14);
+
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
     val = varargin{k+1};
@@ -41,7 +57,7 @@ for k = 1:2:numel(varargin)
     end
 end
 
-if targetKBT <= 0 || strength <= 0
+if targetKBT <= 0 || strength <= 0 || isempty(v)
     vOut = v;
     info = empty_info();
     return;
@@ -49,33 +65,54 @@ end
 
 ids = local_cell_ids(x, params, periodicX, periodicY);
 Nc = params.Nx * params.Ny;
-vOut = v;
-scales = nan(Nc, 1);
-kBTBefore = nan(Nc, 1);
-kBTAfter = nan(Nc, 1);
-nThermo = 0;
+Np = size(v, 1);
 
-for c = 1:Nc
-    pids = find(ids == c);
-    if numel(pids) < minParticles
-        continue;
-    end
-    u = mean(vOut(pids, :), 1);
-    rel = vOut(pids, :) - u;
-    current = 0.5 * mean(sum(rel.^2, 2));
-    if ~isfinite(current) || current < minKBT
-        continue;
-    end
-    targetMixed = (1 - strength) * current + strength * targetKBT;
-    scale = sqrt(max(targetMixed, minKBT) / current);
-    scale = min(max(scale, 1/maxScale), maxScale);
-    vOut(pids, :) = u + scale * rel;
-    scales(c) = scale;
-    kBTBefore(c) = current;
-    relAfter = vOut(pids, :) - mean(vOut(pids, :), 1);
-    kBTAfter(c) = 0.5 * mean(sum(relAfter.^2, 2));
-    nThermo = nThermo + 1;
+% Population and cell means. accumarray is much faster than find(ids==c)
+% inside a cell loop, especially for moderately large particle counts.
+nCell = accumarray(ids, 1, [Nc 1], @sum, 0);
+sumVx = accumarray(ids, v(:,1), [Nc 1], @sum, 0);
+sumVy = accumarray(ids, v(:,2), [Nc 1], @sum, 0);
+
+Ux = zeros(Nc,1);
+Uy = zeros(Nc,1);
+populated = nCell > 0;
+Ux(populated) = sumVx(populated) ./ nCell(populated);
+Uy(populated) = sumVy(populated) ./ nCell(populated);
+
+UxP = Ux(ids);
+UyP = Uy(ids);
+relx = v(:,1) - UxP;
+rely = v(:,2) - UyP;
+rel2 = relx.^2 + rely.^2;
+
+sumRel2 = accumarray(ids, rel2, [Nc 1], @sum, 0);
+kBTBefore = nan(Nc,1);
+kBTBefore(populated) = 0.5 * sumRel2(populated) ./ nCell(populated);
+
+valid = nCell >= minParticles & isfinite(kBTBefore) & kBTBefore > minKBT;
+
+scales = nan(Nc,1);
+scaleApply = ones(Nc,1);
+if any(valid)
+    targetMixed = (1 - strength) .* kBTBefore(valid) + strength .* targetKBT;
+    s = sqrt(max(targetMixed, minKBT) ./ kBTBefore(valid));
+    s = min(max(s, 1/maxScale), maxScale);
+    scales(valid) = s;
+    scaleApply(valid) = s;
 end
+
+sP = scaleApply(ids);
+validP = valid(ids);
+vOut = v;
+if any(validP)
+    vOut(validP,1) = UxP(validP) + sP(validP) .* relx(validP);
+    vOut(validP,2) = UyP(validP) + sP(validP) .* rely(validP);
+end
+
+% Since the cell mean is preserved, kBT_after = scale^2 kBT_before for
+% thermostatted cells.  Avoid a second deposition pass.
+kBTAfter = nan(Nc,1);
+kBTAfter(valid) = (scales(valid).^2) .* kBTBefore(valid);
 
 info = struct();
 info.enabled = true;
@@ -83,13 +120,17 @@ info.targetKBT = targetKBT;
 info.strength = strength;
 info.minParticlesPerCell = minParticles;
 info.maxScale = maxScale;
-info.nThermostattedCells = nThermo;
+info.nThermostattedCells = nnz(valid);
 info.meanScale = mean(scales, 'omitnan');
 info.minScale = min(scales, [], 'omitnan');
 info.maxScaleApplied = max(scales, [], 'omitnan');
-info.meanKBTBefore = mean(kBTBefore, 'omitnan');
-info.meanKBTAfter = mean(kBTAfter, 'omitnan');
-info.rmsVelocityChange = sqrt(mean(sum((vOut - v).^2, 2)));
+info.meanKBTBefore = mean(kBTBefore(valid), 'omitnan');
+info.meanKBTAfter = mean(kBTAfter(valid), 'omitnan');
+if Np > 0
+    info.rmsVelocityChange = sqrt(mean(sum((vOut - v).^2, 2), 'omitnan'));
+else
+    info.rmsVelocityChange = 0.0;
+end
 end
 
 function info = empty_info()

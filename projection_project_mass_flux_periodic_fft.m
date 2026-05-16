@@ -1,45 +1,34 @@
 function proj = projection_project_mass_flux_periodic_fft(N, Ux, Uy, params, varargin)
-%PROJECTION_PROJECT_MASS_FLUX_PERIODIC_FFT Project N*u on a doubly periodic grid.
+%PROJECTION_PROJECT_MASS_FLUX_PERIODIC_FFT Project mass flux M=N*u in a periodic box.
 %
-%   proj = projection_project_mass_flux_periodic_fft(N, Ux, Uy, params)
-%
-% Periodic counterpart of projection_project_mass_flux_periodic_x_neumann_y.
-% It projects the mass flux M = N U using a constant-coefficient spectral
-% Helmholtz-Hodge correction:
-%
-%       M_new = M - grad(lambda),
-%       div(M_new) = target.
-%
-% For Q9, mode='relax_to_uniform_lowk' keeps only the low-k part of the
-% correction, matching the low-k density-energy diagnostic used elsewhere.
+% Supports Q9 mode 'relax_to_uniform_lowk', where the low-k divergence of
+% mass flux is relaxed toward beta/dt*(N-gamma).  It also supports a pure
+% conservative div(M)=0 mode.
 
 if nargin < 4 || isempty(params)
     params = struct();
 end
-if ~isnumeric(N) || ~isnumeric(Ux) || ~isnumeric(Uy) || ...
-        ~isequal(size(N), size(Ux)) || ~isequal(size(Ux), size(Uy))
-    error('N, Ux and Uy must be numeric arrays with identical size.');
+if ~isequal(size(N), size(Ux), size(Uy))
+    error('N, Ux and Uy must have identical size.');
 end
 
-mode = char(string(get_param_default(params, 'massFluxProjectionMode', 'conservative')));
+mode = char(string(get_param_default(params, 'massFluxProjectionMode', 'relax_to_uniform_lowk')));
 beta = get_param_default(params, 'massFluxDensityRelaxationBeta', 0.0);
-minCellCount = get_param_default(params, 'massFluxMinCellCount', 1.0);
-targetFilter = char(string(get_param_default(params, 'massFluxTargetFilter', 'none')));
 lowKMaxIndex = get_param_default(params, 'massFluxLowKMaxIndex', get_param_default(params, 'lowKMaxIndex', 2));
+targetFilter = char(string(get_param_default(params, 'massFluxTargetFilter', 'lowpass_fft')));
+minCellCount = get_param_default(params, 'massFluxMinCellCount', 1.0);
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
     val = varargin{k+1};
     switch key
         case "mode"
             mode = char(string(val));
-        case "relaxationbeta"
+        case {"relaxationbeta", "beta"}
             beta = val;
-        case "mincellcount"
-            minCellCount = val;
+        case {"lowkmaxindex", "lowk"}
+            lowKMaxIndex = val;
         case "targetfilter"
             targetFilter = char(string(val));
-        case "lowkmaxindex"
-            lowKMaxIndex = val;
         otherwise
             error('Unknown option: %s', string(key));
     end
@@ -49,12 +38,9 @@ modeLower = lower(strrep(mode, '-', '_'));
 Lx = get_param_default(params, 'Lx', size(Ux, 1));
 Ly = get_param_default(params, 'Ly', size(Ux, 2));
 dt = get_param_default(params, 'dt', 1.0);
-gamma = get_param_default(params, 'gamma', mean(N(:), 'omitnan'));
+gamma = get_param_default(params, 'gamma', mean(double(N(:)), 'omitnan'));
 if dt <= 0 || Lx <= 0 || Ly <= 0
     error('dt, Lx and Ly must be strictly positive.');
-end
-if minCellCount <= 0
-    error('massFluxMinCellCount must be strictly positive.');
 end
 
 [Nx, Ny] = size(Ux);
@@ -64,7 +50,7 @@ ky1 = periodic_spectral_wavenumbers(Ny, Ly);
 K2 = KX.^2 + KY.^2;
 nonzeroK = K2 > 0;
 lowKMask = make_low_k_mask(Nx, Ny, lowKMaxIndex);
-lowKMask(1, 1) = false;
+lowKMask(1,1) = false;
 
 N = double(N);
 Ux = double(Ux);
@@ -107,7 +93,7 @@ rhsHatFull = divBeforeHat - targetHat;
 rhsHatUsed = rhsHatFull;
 if lowKCorrectionOnly
     rhsHatUsed(~lowKMask) = 0;
-    rhsHatUsed(1, 1) = 0;
+    rhsHatUsed(1,1) = 0;
 end
 
 lambdaHat = zeros(Nx, Ny);
@@ -158,33 +144,25 @@ proj.lambda = real(ifft2(lambdaHat));
 proj.pi = proj.lambda / dt;
 proj.targetDivMassRequested = targetRequested;
 proj.targetDivMass = target;
-proj.targetProjectionResidual = zeros(Nx, Ny);
 proj.divMassBefore = divBeforeDiag;
 proj.divMassAfter = divAfterDiag;
 proj.divMassResidual = residualDiag;
 proj.divMassBeforeFull = divBeforeFull;
 proj.divMassAfterFull = divAfterFull;
 proj.divMassResidualFull = residualFull;
-proj.rhsRequested = real(ifft2(rhsHatFull));
-proj.rhsUsed = real(ifft2(rhsHatUsed));
 proj.rmsDivMassBefore = sqrt(mean(divBeforeDiag(:).^2, 'omitnan'));
 proj.rmsDivMassAfter = sqrt(mean(divAfterDiag(:).^2, 'omitnan'));
 proj.rmsTargetDivMassRequested = sqrt(mean(targetRequested(:).^2, 'omitnan'));
 proj.rmsTargetDivMass = sqrt(mean(target(:).^2, 'omitnan'));
-proj.rmsTargetProjectionResidual = 0;
 proj.rmsDivMassResidual = sqrt(mean(residualDiag(:).^2, 'omitnan'));
 proj.maxAbsDivMassBefore = max(abs(divBeforeDiag(:)));
 proj.maxAbsDivMassAfter = max(abs(divAfterDiag(:)));
 proj.maxAbsTargetDivMassRequested = max(abs(targetRequested(:)));
 proj.maxAbsTargetDivMass = max(abs(target(:)));
-proj.maxAbsTargetProjectionResidual = 0;
 proj.maxAbsDivMassResidual = max(abs(residualDiag(:)));
 proj.rmsDivMassBeforeFull = sqrt(mean(divBeforeFull(:).^2, 'omitnan'));
 proj.rmsDivMassAfterFull = sqrt(mean(divAfterFull(:).^2, 'omitnan'));
 proj.rmsDivMassResidualFull = sqrt(mean(residualFull(:).^2, 'omitnan'));
-proj.maxAbsDivMassBeforeFull = max(abs(divBeforeFull(:)));
-proj.maxAbsDivMassAfterFull = max(abs(divAfterFull(:)));
-proj.maxAbsDivMassResidualFull = max(abs(residualFull(:)));
 proj.lowKCorrectionOnly = lowKCorrectionOnly;
 proj.divMassReduction = proj.rmsDivMassResidual / max(proj.rmsDivMassBefore, eps);
 proj.massDeltaBefore = sum(divBeforeFull(:));
@@ -198,7 +176,6 @@ proj.Nx = Nx;
 proj.Ny = Ny;
 proj.dx = Lx / Nx;
 proj.dy = Ly / Ny;
-proj.regularization = 0;
 proj.minCellCount = minCellCount;
 proj.targetFilter = targetFilter;
 proj.lowKMaxIndex = lowKMaxIndex;
@@ -208,7 +185,7 @@ end
 function B = mask_fft(A, mask)
 B = A;
 B(~mask) = 0;
-B(1, 1) = 0;
+B(1,1) = 0;
 end
 
 function target = apply_mass_flux_target_filter(targetRaw, targetFilter, lowKMaxIndex)
@@ -218,26 +195,20 @@ switch filterLower
     case {"none", "off", "identity", "raw"}
         target = double(targetRaw);
     case {"lowpass_fft", "lowk", "fft_lowk"}
-        H = fft2(double(targetRaw));
         mask = make_low_k_mask(Nx, Ny, lowKMaxIndex);
-        mask(1, 1) = false;
-        H(~mask) = 0;
-        target = real(ifft2(H));
+        targetHat = fft2(double(targetRaw));
+        targetHat(~mask) = 0;
+        target = real(ifft2(targetHat));
     otherwise
         error('Unknown massFluxTargetFilter: %s', targetFilter);
 end
-target = target - mean(target(:), 'omitnan');
 end
 
 function mask = make_low_k_mask(Nx, Ny, kmax)
 ix = [0:floor(Nx/2), -ceil(Nx/2)+1:-1];
 iy = [0:floor(Ny/2), -ceil(Ny/2)+1:-1];
-if numel(ix) > Nx
-    ix = ix(1:Nx);
-end
-if numel(iy) > Ny
-    iy = iy(1:Ny);
-end
+if numel(ix) > Nx, ix = ix(1:Nx); end
+if numel(iy) > Ny, iy = iy(1:Ny); end
 [KX, KY] = ndgrid(ix, iy);
 mask = sqrt(double(KX).^2 + double(KY).^2) <= kmax;
 end
@@ -251,7 +222,7 @@ end
 end
 
 function val = get_param_default(params, name, defaultValue)
-if isfield(params, name) && ~isempty(params.(name))
+if isstruct(params) && isfield(params, name) && ~isempty(params.(name))
     val = params.(name);
 else
     val = defaultValue;

@@ -1,15 +1,19 @@
 function th = projection_thermal_diagnostics(x, v, params, varargin)
 %PROJECTION_THERMAL_DIAGNOSTICS Separate hydrodynamic and thermal energies.
 %
-%   th = projection_thermal_diagnostics(x, v, params)
+%   th = projection_thermal_diagnostics(x, v, params, ...)
 %
-% Deposits particle velocities on the MPCD grid, interpolates the cell mean
-% velocity back to particles with nearest-cell assignment, and separates:
-%   hydrodynamic energy   1/2 <|U_cell|^2>
-%   thermal energy        1/2 <|v_i - U_cell(i)|^2>
+% This diagnostic uses the same nearest-cell assignment convention as
+% projection_apply_cell_thermostat.  Important: projection_deposit_particles_to_grid
+% stores fields as Nx-by-Ny arrays after a transpose for plotting/field usage;
+% therefore this function does NOT recover cell values using G.Ux(:) indexed by
+% the raw particle cell ids.  It recomputes the cell means in the native 1D cell
+% id ordering, so that the temperature diagnosed here is exactly comparable to
+% the one imposed by projection_apply_cell_thermostat.
 %
-% The global kBT diagnostic based on v_i - mean(v) is also reported for
-% comparison. In 2D, kBT = 1/2 <|c|^2> for unit particle mass.
+% In 2D, the reported cell-relative kBT is
+%      kBT = 1/2 < |v_i - U_cell(i)|^2 >
+% for unit particle mass.
 
 if nargin < 3
     error('Usage: th = projection_thermal_diagnostics(x, v, params, ...)');
@@ -36,39 +40,49 @@ for k = 1:2:numel(varargin)
     end
 end
 
+% Keep the usual grid structure for downstream diagnostics/plots.
 G = projection_deposit_particles_to_grid(x, v, params, ...
     'periodicX', periodicX, 'periodicY', periodicY, 'minCount', minCount);
-ids = local_cell_ids(x, params, periodicX, periodicY);
 
-Ux = G.Ux(:);
-Uy = G.Uy(:);
-Ucell = [Ux(ids), Uy(ids)];
+ids = local_cell_ids(x, params, periodicX, periodicY);
+Nc = params.Nx * params.Ny;
+Np = size(x,1);
+
+% Native 1D cell statistics, consistent with the thermostat.
+nCell = accumarray(ids, 1, [Nc 1], @sum, 0);
+sumVx = accumarray(ids, v(:,1), [Nc 1], @sum, 0);
+sumVy = accumarray(ids, v(:,2), [Nc 1], @sum, 0);
+
+populated = nCell > 0;
+Ux1 = zeros(Nc,1);
+Uy1 = zeros(Nc,1);
+Ux1(populated) = sumVx(populated) ./ nCell(populated);
+Uy1(populated) = sumVy(populated) ./ nCell(populated);
+
+Ucell = [Ux1(ids), Uy1(ids)];
 vrel = v - Ucell;
-umean = mean(v, 1);
+umean = mean(v, 1, 'omitnan');
 cglobal = v - umean;
 
-N = G.N(:);
-validCells = N > 0;
-localKBT = nan(numel(N), 1);
-localHydroKE = nan(numel(N), 1);
-for c = find(validCells).'
-    pids = ids == c;
-    if any(pids)
-        cc = v(pids, :) - [Ux(c), Uy(c)];
-        localKBT(c) = 0.5 * mean(sum(cc.^2, 2));
-        localHydroKE(c) = 0.5 * (Ux(c)^2 + Uy(c)^2);
-    end
-end
+rel2 = sum(vrel.^2, 2);
+sumRel2 = accumarray(ids, rel2, [Nc 1], @sum, 0);
+localKBT = nan(Nc,1);
+localKBT(populated) = 0.5 * sumRel2(populated) ./ nCell(populated);
+
+localHydroKE = nan(Nc,1);
+localHydroKE(populated) = 0.5 * (Ux1(populated).^2 + Uy1(populated).^2);
+
+validCells = nCell >= minCount;
 
 th = struct();
-th.Np = size(x,1);
+th.Np = Np;
 th.G = G;
 th.meanVx = umean(1);
 th.meanVy = umean(2);
-th.kBTGlobal = 0.5 * mean(sum(cglobal.^2, 2));
-th.kBTCellRelative = 0.5 * mean(sum(vrel.^2, 2));
-th.totalKineticEnergy = 0.5 * mean(sum(v.^2, 2));
-th.hydroKineticEnergy = 0.5 * mean(sum(Ucell.^2, 2));
+th.kBTGlobal = 0.5 * mean(sum(cglobal.^2, 2), 'omitnan');
+th.kBTCellRelative = 0.5 * mean(rel2, 'omitnan');
+th.totalKineticEnergy = 0.5 * mean(sum(v.^2, 2), 'omitnan');
+th.hydroKineticEnergy = 0.5 * mean(sum(Ucell.^2, 2), 'omitnan');
 th.thermalKineticEnergy = th.kBTCellRelative;
 th.energyClosureError = th.totalKineticEnergy - th.hydroKineticEnergy - th.thermalKineticEnergy;
 th.localKBTMean = mean(localKBT(validCells), 'omitnan');
@@ -76,11 +90,18 @@ th.localKBTStd = std(localKBT(validCells), 0, 'omitnan');
 th.localKBTMin = min(localKBT(validCells), [], 'omitnan');
 th.localKBTMax = max(localKBT(validCells), [], 'omitnan');
 th.localHydroKEMean = mean(localHydroKE(validCells), 'omitnan');
-th.nEmptyCells = nnz(~validCells);
+th.nEmptyCells = nnz(~populated);
 th.nValidCells = nnz(validCells);
-th.populationStd = std(double(N));
-th.populationMean = mean(double(N));
+th.populationStd = std(double(nCell));
+th.populationMean = mean(double(nCell));
 th.populationCV = th.populationStd / max(th.populationMean, eps);
+
+% Extra consistency fields useful while validating the thermostat.
+if any(validCells)
+    th.kBTCellRelativeWeightedValid = sum(nCell(validCells) .* localKBT(validCells)) ./ sum(nCell(validCells));
+else
+    th.kBTCellRelativeWeightedValid = NaN;
+end
 end
 
 function ids = local_cell_ids(x, params, periodicX, periodicY)

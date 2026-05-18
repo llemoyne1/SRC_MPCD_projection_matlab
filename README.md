@@ -1,515 +1,468 @@
-# SRC_MPCD_projection_matlab — Q9 forced Taylor–Green validation
+# SRC/MPCD Q9 — Taylor–Green & Poiseuille clean validation
 
-Prototype MATLAB minimal pour la validation d’une méthode SRC/MPCD quasi-incompressible par projection de vitesse et projection low-k du flux de masse.
+This repository contains the clean MATLAB version of the SRC/MPCD projection framework focused on two validated benchmark cases:
 
-Cette branche est volontairement centrée sur un cas test unique et propre : le vortex de Taylor–Green forcé en domaine entièrement périodique. Elle sert à figer une base **bulk-only** Q6/Q9 corrigée, avec thermostat commun, diagnostic thermique corrigé, correction globale exacte de quantité de mouvement, visualisation et estimation de viscosité effective.
+1. **Periodic forced Taylor–Green flow** for bulk viscosity and Q9 non-regression.
+2. **Poiseuille channel flow with virtual wall particles** for wall/no-slip validation and comparison with the Taylor–Green bulk viscosity.
 
-```text
-Branche recommandée : q9-mass-flux-projection-momentum-correction-parallel
-Méthode principale  : Q9 = Q6 + projection low-k du flux de masse N u
-Cas validant        : Taylor–Green forcé périodique
-Statut              : validation bulk positive sur structure tourbillonnaire forcée
-Hors périmètre      : piston, marche, cylindre, surface libre, Q10/interface
-```
+The repository is intentionally restricted to the scripts required for these two cases. Obsolete free-surface, dam-break, inclined-layer, step-channel and intermediate debug scripts have been removed from this clean branch.
 
 ---
 
-## 1. Objectif scientifique
+## 1. Numerical methods included
 
-Le SRC/MPCD classique possède des fluctuations mésoscopiques utiles, mais il laisse apparaître des modes compressifs de densité importants dans des configurations où l’on souhaite approcher un comportement liquide ou quasi-incompressible.
+### Classic SRC/MPCD
 
-L’objectif de cette branche est de valider une méthode de projection qui réduit ces modes compressifs sans détruire une structure tourbillonnaire organisée.
+The baseline method is standard stochastic rotation dynamics / MPCD:
 
-La projection incompressible de base vise :
+- particle streaming,
+- optional forcing,
+- random grid shift,
+- cell-wise SRC rotation,
+- thermal control,
+- diagnostics and visualization.
 
-```math
-\nabla \cdot u \simeq 0.
-```
+### Q6 velocity projection
 
-La correction Q9 agit en plus sur le flux de masse discret :
+Q6 adds an incompressibility projection of the grid velocity field:
 
-```math
-M = N u,
-```
+\[
+\nabla \cdot \mathbf{u} \simeq 0.
+\]
 
-où `N` est l’occupation particulaire cellulaire et `u` la vitesse moyenne cellulaire. L’objectif est de réduire les grandes longueurs d’onde de densité en corrigeant préférentiellement les modes low-k de :
+It is used mostly as a reference between classic SRC and the Q9 method.
 
-```math
-\nabla \cdot (N u).
-```
+### Q9 mass-flux projection
 
----
+Q9 adds a low-wavenumber correction of the mass flux:
 
-## 2. Méthodes comparées
+\[
+\mathbf{J} = N \mathbf{u},
+\]
 
-Le script principal compare trois méthodes.
+designed to reduce slow density/compressibility modes while preserving global momentum.
 
-### CLASSIC
+In periodic Taylor–Green, Q9 uses FFT-based periodic operators.  
+In Poiseuille channel flow, Q9 uses the current elliptic/general boundary-condition operator.
 
-SRC/MPCD périodique classique avec forçage Taylor–Green et thermostat post-step commun.
+### Wall virtual particles, wallVP-v2
 
-```text
-forcing Taylor–Green
--> streaming périodique
--> collision SRC/MPCD
--> thermostat cellulaire
--> diagnostics
-```
-
-### Q6
-
-SRC/MPCD classique suivi d’une projection de vitesse :
-
-```text
-classic step
--> projection de vitesse div(u) ≈ 0
--> correction globale exacte de quantité de mouvement
--> thermostat cellulaire
--> diagnostics
-```
-
-### Q9
-
-Q9 ajoute à Q6 une relaxation low-k du flux de masse :
-
-```text
-classic step
--> projection de vitesse Q6
--> correction globale exacte de quantité de mouvement Q6
--> correction low-k du flux de masse N u
--> correction globale exacte de quantité de mouvement Q9
--> cleanup final éventuel de div(u)
--> correction globale exacte de quantité de mouvement cleanup
--> thermostat cellulaire
--> diagnostics
-```
-
-Paramètres Q9 de référence :
+The Poiseuille channel uses a shifted-grid virtual wall particle model:
 
 ```matlab
+params.wallVirtualParticlesEnable = true;
+params.wallVirtualParticlesGeometryMode = 'shifted_solid_fraction';
+params.wallVirtualParticlesDensityFactor = 0.8;
+```
+
+Virtual particles:
+
+- participate in the SRC collision average,
+- have wall mean velocity,
+- have thermal fluctuations at `kBT`,
+- are not stored in the real particle state,
+- are not advected,
+- are discarded after collision.
+
+This restores the momentum balance at the wall and removes the previous excessive slip observed in Poiseuille.
+
+---
+
+## 2. Main entry points
+
+### Taylor–Green periodic benchmark
+
+```matlab
+run_projection_forced_taylor_green_demo.m
+```
+
+Optional validation wrapper:
+
+```matlab
+run_q9_forced_taylor_green_validation.m
+```
+
+### Poiseuille channel benchmark
+
+```matlab
+run_projection_poiseuille_medium64_demo.m
+```
+
+Wall virtual particle validation:
+
+```matlab
+run_q9_poiseuille_wall_virtual_particles_validation.m
+```
+
+Q9-inclusive height convergence campaign:
+
+```matlab
+run_q9_poiseuille_wallvp_v2_q9_height_campaign.m
+```
+
+Poiseuille post-processing with viscosity scaling:
+
+```matlab
+postprocess_poiseuille_campaign_scaling.m
+```
+
+---
+
+## 3. Taylor–Green non-regression
+
+The current reference Q9 Taylor–Green run is:
+
+```matlab
+params = struct();
+
+params.method = 'q9';
+
+params.Lx = 1.0;
+params.Ly = 1.0;
+params.Nx = 64;
+params.Ny = 64;
+params.gamma = 20;
+params.seed = 11;
+
+params.dt = 1.0e-3;
+params.kBT = 0.01;
+params.alphaDeg = 90;
+
+params.nSteps = 30000;
+params.sampleEvery = 100;
+params.progressEvery = 1000;
+
+params.taylorGreenInitialAmplitude = 0.10;
+params.taylorGreenAmplitude = 0.10;
+params.taylorGreenThermalNoise = true;
+params.taylorGreenForceEnable = true;
+params.taylorGreenForceAmplitude = 0.12;
+params.taylorGreenForceZeroMeanKick = true;
+params.taylorGreenModeX = 1;
+params.taylorGreenModeY = 1;
+
+params.initialPopulationMode = 'exact_per_cell';
+params.initialVelocityZeroGlobalMean = true;
+params.useRandomGridShift = true;
+
+params.thermostatAfterStep = true;
+params.thermostatAfterProjection = true;
+
+params.projectionEnable = true;
 params.projectionStrength = 1.0;
+params.projectionInterpolationMethod = 'nearest';
+params.projectionMomentumCorrectionEnable = true;
+params.projectionMomentumCorrectionMode = 'particle_global_exact';
 
 params.massFluxProjectionMode = 'relax_to_uniform_lowk';
 params.massFluxProjectionStrength = 1.0;
-params.massFluxDensityRelaxationBeta = 5e-4;
+params.massFluxDensityRelaxationBeta = 5.0e-4;
 params.massFluxApplyAfterVelocityProjection = true;
-params.massFluxTargetFilter = 'lowpass_fft';
 params.massFluxLowKMaxIndex = 2;
-
+params.lowKMaxIndex = 2;
 params.massFluxFinalVelocityProjectionCleanup = true;
 params.massFluxFinalVelocityProjectionStrength = 0.5;
-```
 
----
+params.taylorGreenViscosityFitFraction = 0.60;
 
-## 3. Correction globale exacte de quantité de mouvement
-
-Une projection de pression modifie les vitesses particulaires :
-
-```math
-v_i^{new} = v_i + \delta v_i.
-```
-
-Elle peut donc injecter une quantité de mouvement globale numérique :
-
-```math
-\Delta P_{proj} = \sum_i m_i \delta v_i.
-```
-
-La branche intègre une correction globale exacte appliquée aux corrections numériques de projection :
-
-```math
-\delta v_i^{corr}
-= \delta v_i
-- \frac{\sum_j m_j \delta v_j}{\sum_j m_j}.
-```
-
-Pour masses unitaires :
-
-```math
-\delta v_i^{corr}
-= \delta v_i - \langle \delta v \rangle.
-```
-
-Ainsi :
-
-```math
-\sum_i \delta v_i^{corr} = 0.
-```
-
-Cette correction est appliquée aux sous-étapes numériques Q6, Q9 et cleanup. Elle ne retire pas les impulsions physiques éventuelles associées au forcing, aux collisions ou aux conditions aux limites.
-
-Diagnostics associés :
-
-```text
-meanMomentumRawDV       : norme moyenne du kick global brut par particule
-meanMomentumResidualDV  : résidu après correction globale exacte
-```
-
-Dans le run de référence, le résidu corrigé est de l’ordre de la précision machine.
-
----
-
-## 4. Thermostat commun et diagnostic thermique corrigé
-
-Le cas Taylor–Green forcé utilise un thermostat cellulaire commun aux trois méthodes. La comparaison CLASSIC/Q6/Q9 serait biaisée si le thermostat n’était appliqué qu’à certaines méthodes.
-
-Ordre final retenu :
-
-```text
-CLASSIC :
-  forcing -> streaming -> collision -> thermostat -> diagnostics
-
-Q6/Q9 :
-  forcing -> streaming -> collision -> projection(s)
-  -> correction globale du moment
-  -> thermostat -> diagnostics
-```
-
-Le thermostat cellulaire recale les vitesses relatives autour de la vitesse moyenne de cellule :
-
-```math
-v_i \leftarrow u_c + s_c (v_i - u_c),
-```
-
-ce qui conserve la quantité de mouvement de chaque cellule à l’arrondi près.
-
-Le diagnostic thermique a été corrigé pour utiliser la même convention d’indexation cellulaire que le thermostat. Le champ suivi `kBT cell` correspond maintenant correctement à la température imposée.
-
-Ce point est important : les conclusions quantitatives obtenues avant cette correction, notamment sur la viscosité effective, la réponse mécanique au piston et les essais de surface libre, doivent être considérées comme provisoires tant qu’elles n’ont pas été réauditées avec ce noyau corrigé.
-
----
-
-## 5. Cas test validant : Taylor–Green forcé périodique
-
-Le cas validant est un vortex de Taylor–Green forcé en domaine périodique 2D.
-
-Champ de vitesse modal :
-
-```math
-u_x = A \sin(k_x x) \cos(k_y y),
-```
-
-```math
-u_y = -A \frac{k_x}{k_y} \cos(k_x x) \sin(k_y y).
-```
-
-Forçage divergence-free de même forme :
-
-```math
-f_x = F \sin(k_x x) \cos(k_y y),
-```
-
-```math
-f_y = -F \frac{k_x}{k_y} \cos(k_x x) \sin(k_y y).
-```
-
-Le cas est intéressant parce que la structure tourbillonnaire attendue est connue et mesurable. La validation ne repose donc pas seulement sur des diagnostics indirects comme une longueur de recirculation ou un signal pariétal bruité.
-
-Diagnostics principaux :
-
-```text
-amplitude du mode Taylor–Green
-cohérence modale
-énergie du mode
-vorticité / enstrophie
-fraction high-k de l’énergie de vitesse
-low-k density energy
-density relative RMS
-kBT cell
-viscosité effective forcée
-correction globale de moment
-```
-
----
-
-## 6. Lancer le cas de validation
-
-Depuis MATLAB, à la racine du dépôt :
-
-```matlab
-run_q9_forced_taylor_green_validation
-```
-
-Le script compare par défaut :
-
-```text
-CLASSIC
-Q6
-Q9
-```
-
-Configuration de référence recommandée pour un run court mais discriminant :
-
-```text
-Nx = Ny = 64
-gamma = 20
-nSteps = 5000
-sampleEvery = 100
-visualEvery = 250
-dt = 0.001
-kBT = 0.01
-TG initial amplitude = 0.10
-TG force amplitude   = 0.12
-TG mode              = (1,1)
-Q9 beta/lowK/cleanup = 5e-4 / 2 / 0.5
-```
-
-Le run génère un dossier de sortie du type :
-
-```text
-q9_forced_taylor_green_medium64_compare_classic_q6_q9_YYYYMMDD_HHMMSS/
-```
-
-avec notamment :
-
-```text
-forced_tg_summary.txt
-forced_tg_summary.csv
-forced_tg_classic_timeseries.csv
-forced_tg_q6_timeseries.csv
-forced_tg_q9_timeseries.csv
-forced_tg_timeseries.png
-forced_tg_viscosity_fit.png
-forced_tg_validation.mat
-```
-
-Ces sorties ne doivent pas être versionnées.
-
----
-
-## 7. Visualisation
-
-Le cas Taylor–Green forcé inclut une visualisation live pour suivre les structures, et non seulement les scalaires de diagnostic.
-
-La visualisation affiche :
-
-```text
-particules,
-densité relative N/gamma - 1,
-vitesse |u| avec quiver,
-vorticité omega.
-```
-
-Des champs moyens peuvent également être accumulés selon les paramètres du run.
-
-Paramètres utiles :
-
-```matlab
 params.visualEnable = true;
-params.visualEvery = 250;
-params.visualSaveFrames = false;
+params.visualEvery = 500;
+params.visualPause = 0.001;
+params.visualMaxParticles = 8000;
+
+out = run_projection_forced_taylor_green_demo(params);
 ```
 
-Pour un run plus long ou plus coûteux, augmenter `visualEvery`.
+### Current reference result
 
----
-
-## 8. Fit de viscosité effective
-
-Le cas forcé permet d’estimer une viscosité effective à partir de l’amplitude modale.
-
-Le modèle utilisé est :
-
-```math
-\frac{dA}{dt} = F - \nu_{eff} (k_x^2 + k_y^2) A.
-```
-
-D’où :
-
-```math
-\nu_{eff} = \frac{F - dA/dt}{(k_x^2 + k_y^2) A}.
-```
-
-Le code fournit plusieurs estimations :
+For `Nx=Ny=64`, `gamma=20`, `dt=1e-3`, `kBT=0.01`, `F_TG=0.12`:
 
 ```text
-meanNuEffForced
-finalNuEffForced
-nuEffFitPreferred
-nuEffFitDerivativeKnownF
-nuEffFitExpKnownF
-nuEffFitPlateau
-viscosityFitR2
+Q9 Taylor–Green:
+    nu_eff preferred      ≈ 0.02050
+    nu_eff derivative     ≈ 0.02052
+    nu_eff plateau        ≈ 0.02052
+    kBT                   ≈ 0.01
+    final low-k density   ≈ 1.1e-6
+    final coherence       ≈ 0.87
+    final high-k fraction ≈ 0.10
 ```
 
-Le fit est surtout interprétable lorsque l’amplitude atteint une fenêtre quasi stationnaire ou suit une relaxation exponentielle suffisamment nette. Pour les runs courts proches du plateau, les estimateurs `knownF` et `plateau` sont plus robustes que le fit libre de `F`.
+This is the current bulk-viscosity non-regression reference for Q9.
 
 ---
 
-## 9. Résultat de référence actuel
+## 4. Poiseuille wallVP-v2 validation
 
-Run validant recommandé :
+The preferred Poiseuille wall model is:
+
+```matlab
+params.wallModeY = 'bounceback';
+
+params.wallVirtualParticlesEnable = true;
+params.wallVirtualParticlesGeometryMode = 'shifted_solid_fraction';
+params.wallVirtualParticlesDensityFactor = 0.8;
+params.wallVirtualParticlesThermal = true;
+```
+
+The main validation campaign is:
+
+```matlab
+results = run_q9_poiseuille_wallvp_v2_q9_height_campaign();
+```
+
+Default campaign:
 
 ```text
-methods = CLASSIC, Q6, Q9
-Nx = Ny = 64
-gamma = 20
-nSteps = 5000
-dt = 0.001
-kBT = 0.01
-TG initial/force amplitude = 0.10 / 0.12
-Q9 beta/lowK/cleanup = 5e-4 / 2 / 0.5
+densityFactor = 0.8
+geometryMode  = shifted_solid_fraction
+bodyForceX    = 0.005
+nuGuess       = 0.032
+visualEnable  = true
+
+Runs:
+    CLASSIC 32 x 48
+    Q9      32 x 48
+    CLASSIC 48 x 64
+    Q9      48 x 64
+    CLASSIC 64 x 96
+    Q9      64 x 96
 ```
 
-Synthèse :
-
-| Métrique | CLASSIC | Q6 | Q9 |
-|---|---:|---:|---:|
-| final amplitude | 0.07855 | 0.07271 | 0.07379 |
-| final coherence | 0.735 | 0.856 | 0.865 |
-| final high-k fraction | 0.212 | 0.111 | 0.107 |
-| final low-k density | 1.740e-2 | 1.203e-6 | 2.148e-7 |
-| mean density rel RMS | 0.266 | 0.167 | 0.167 |
-| final kBT cell | 0.010 | 0.010 | 0.010 |
-| nu_eff fit preferred | 0.01933 | 0.02098 | 0.02108 |
-| mean raw momentum kick / particle | NaN | 3.59e-5 | 4.74e-5 |
-| mean residual momentum kick / particle | NaN | 7.21e-19 | 1.79e-18 |
-
-Lecture :
+The campaign writes:
 
 ```text
-CLASSIC conserve une amplitude brute plus élevée,
-mais accumule fortement des modes compressifs low-k.
-
-Q6 améliore fortement la cohérence modale et réduit les modes compressifs.
-
-Q9 donne le meilleur contrôle de densité low-k,
-une cohérence finale légèrement supérieure à Q6,
-et une viscosité effective très proche de Q6.
-```
-
-Conclusion du run : Q9 rend le fluide nettement moins compressible sans supprimer la structure tourbillonnaire imposée. La méthode augmente légèrement la viscosité effective, ce qui doit être interprété comme une propriété effective du fluide projeté.
-
----
-
-## 10. Fichiers nécessaires dans cette branche minimale
-
-### Script principal
-
-| Fichier | Rôle |
-|---|---|
-| `run_q9_forced_taylor_green_validation.m` | Lance la comparaison CLASSIC/Q6/Q9 et écrit les résumés |
-| `run_projection_forced_taylor_green_demo.m` | Moteur d’un run Taylor–Green forcé pour une méthode donnée |
-
-### Initialisation, forcing, diagnostics et visualisation
-
-| Fichier | Rôle |
-|---|---|
-| `projection_initialize_particles_taylor_green_forced.m` | Initialise les particules et le champ TG |
-| `projection_taylor_green_mode_at_points.m` | Évalue le mode TG aux positions particulaires |
-| `projection_apply_taylor_green_forcing.m` | Applique le forçage TG divergence-free |
-| `projection_taylor_green_diagnostics.m` | Calcule amplitude, cohérence, enstrophie, high-k, low-k |
-| `projection_taylor_green_visualize_frame.m` | Visualisation instantanée des champs |
-| `projection_fit_forced_taylor_green_viscosity.m` | Fit de viscosité effective |
-
-### Steps SRC/MPCD et projections
-
-| Fichier | Rôle |
-|---|---|
-| `mpcd_step_classic_periodic_forced.m` | Step SRC/MPCD périodique forcé avec thermostat commun |
-| `mpcd_step_projection_periodic_q9_forced.m` | Step Q6/Q9 périodique forcé |
-| `mpcd_apply_q9_projection_periodic.m` | Projection périodique Q6/Q9, cleanup, correction de moment |
-| `projection_project_grid_periodic_fft.m` | Projection de vitesse périodique par FFT |
-| `projection_project_mass_flux_periodic_fft.m` | Projection low-k du flux de masse périodique |
-
-### Utilitaires communs indispensables
-
-| Fichier | Rôle |
-|---|---|
-| `projection_deposit_particles_to_grid.m` | Dépôt particules -> grille |
-| `projection_interpolate_grid_delta_to_particles.m` | Interpolation correction grille -> particules |
-| `projection_population_diagnostics.m` | Diagnostics d’occupation cellulaire |
-| `projection_apply_global_momentum_correction.m` | Correction globale exacte de quantité de mouvement |
-| `projection_apply_cell_thermostat.m` | Thermostat cellulaire vectorisé |
-| `projection_thermal_diagnostics.m` | Diagnostic thermique corrigé |
-
-Les anciens scripts `piston`, `cylinder`, `step`, `staircase`, `surface_leveling`, `inclined_layer`, `dam_break` et `Q10` ne sont pas nécessaires dans cette branche minimale.
-
----
-
-## 11. Fichiers générés à ignorer
-
-Ajouter ou conserver dans `.gitignore` :
-
-```gitignore
-# Generated validation outputs
-q9_*/
-*.mat
-*.asv
-forced_tg_*_timeseries.csv
-forced_tg_summary.csv
-forced_tg_summary.txt
-forced_tg_timeseries.png
-forced_tg_viscosity_fit.png
+console_log.txt
+summary.csv
+summary.mat
+campaign_results.mat
+one .mat file per run
 ```
 
 ---
 
-## 12. Statut des anciens cas tests
+## 5. Poiseuille viscosity scaling
 
-Cette branche fige uniquement le noyau validé sur Taylor–Green forcé. Les autres cas test historiques ne sont pas inclus et ne doivent pas être utilisés comme preuve de validation dans cette branche.
+The raw Poiseuille fit gives:
 
-À cause des corrections récentes sur le thermostat et le diagnostic thermique, les conclusions quantitatives antérieures doivent être reclassées ainsi :
+\[
+\nu_\mathrm{raw}
+=
+-\frac{f_x}{2a_2},
+\]
 
-| Cas historique | Statut recommandé |
-|---|---|
-| Poiseuille | probablement robuste qualitativement, mais `nu_eff` et bilans thermiques à réauditer |
-| Piston / EOS | à réauditer prioritairement avec thermostat et diagnostics corrigés |
-| Marche / step-channel | intéressant qualitativement, mais non inclus dans la branche minimale |
-| Cylindre / von Kármán | non validé en MATLAB actuel ; à reprendre en version plus résolue |
-| Surface libre / Q10 | non validé ; conclusions antérieures provisoires |
-| Dam-break / inclined layer / surface leveling | exploratoire ; à reprendre seulement après audit piston/EOS |
+where \(a_2\) is the quadratic coefficient of the fitted profile.
 
-La réponse piston et les essais de surface libre sont les deux points les plus sensibles, car ils dépendent directement de la température effective, de la pression cinétique, de la viscosité effective et des échanges de quantité de mouvement.
+When comparing different `Ny`, the viscosity must be scaled consistently with the wall-normal cell size. The current post-processing reports:
 
----
+```matlab
+nuEffRaw
+nuEffScaledNyRef
+nuEffCellY
+dy
+nuScaleFactorNyRef
+```
 
-## 13. Suite recommandée
+with:
 
-Il n’est pas nécessaire de multiplier les cas Taylor–Green à ce stade. Le cas forcé périodique a rempli son rôle : valider un noyau bulk Q6/Q9 propre.
+```matlab
+nuEffScaledNyRef = nuEffRaw * (Ny / NyRef)^2;
+```
 
-La suite logique est un audit ciblé, dans cet ordre :
+By default:
+
+```matlab
+NyRef = 64;
+```
+
+To reprocess a campaign:
+
+```matlab
+summaryScaled = postprocess_poiseuille_campaign_scaling( ...
+    'E:\GitHub\SRC_MPCD_projection_matlab_par\q9_wallvp_v2_q9_height_20260518_084250\campaign_results.mat', ...
+    'nuReferenceNy', 64, ...
+    'fitWindowTime', 5, ...
+    'accelerationWindowTime', 5);
+```
+
+This writes:
 
 ```text
-1. Geler cette branche TG comme base minimale propre.
-2. Créer une branche séparée pour réaudit piston/EOS avec le noyau thermostat corrigé.
-3. Reprendre seulement ensuite les cas surface libre/Q10.
-4. Éviter de mélanger dans une même branche : bulk périodique, piston, parois, surface libre et interface.
-5. Porter le noyau Q9 bulk vers C++/OpenMP lorsque l’API MATLAB est figée.
+summary_scaled.csv
 ```
-
-Pour le réaudit piston, les diagnostics indispensables seront :
-
-```text
-kBT cell avant/après thermostat,
-Pkin,
-Pwall,
-Pexcess = Pwall - Pkin,
-nu_eff ou indicateur de dissipation,
-low-k density,
-correction globale de moment,
-bilan énergétique.
-```
-
-Pour la surface libre, les anciens résultats ne doivent pas être interprétés comme une validation ou une invalidation définitive de Q9/Q10. Ils indiquent surtout que le couplage interface/bulk/contact paroi doit être repris sur un noyau thermique et mécanique propre.
 
 ---
 
-## 14. Conclusion
+## 6. Current Poiseuille validation state
 
-Cette branche fournit un état propre et minimal de la méthode Q9 :
+With `densityFactor=0.8`, `bodyForceX=0.005`, wallVP-v2 and `NyRef=64`, the current scaled viscosity results are:
+
+| Method | Grid | `nuEffRaw` | `nuEffScaledNyRef` | `R2` | `ratioAccelRecent` |
+|---|---:|---:|---:|---:|---:|
+| classic | 32×48 | 0.03489 | 0.01963 | 0.9706 | -0.057 |
+| Q9 | 32×48 | 0.03614 | 0.02033 | 0.9853 | -0.085 |
+| classic | 48×64 | 0.01960 | 0.01960 | 0.9950 | -0.020 |
+| Q9 | 48×64 | 0.02114 | 0.02114 | 0.9941 | -0.037 |
+| classic | 64×96 | 0.00948 | 0.02133 | 0.9991 | +0.067 |
+| Q9 | 64×96 | 0.01038 | 0.02336 | 0.9979 | +0.078 |
+
+The most reliable current Poiseuille reference point is:
 
 ```text
-projection div(u),
-projection low-k du flux de masse N u,
-thermostat commun corrigé,
-diagnostic thermique corrigé,
-correction globale exacte de quantité de mouvement,
-visualisation des structures,
-fit de viscosité effective.
+Q9, 48 x 64:
+    nuEffScaledNyRef ≈ 0.02114
+    R2               ≈ 0.994
+    ratioAccelRecent ≈ -0.037
+    final low-k      ≈ 2.9e-6
 ```
 
-Le cas Taylor–Green forcé montre que Q9 réduit les modes compressifs de densité de plusieurs ordres de grandeur tout en conservant une structure tourbillonnaire organisée. La méthode modifie légèrement la viscosité effective, mais ce comportement est mesurable, stable et compatible avec l’interprétation de Q9 comme fluide SRC/MPCD quasi-incompressible effectif.
+This is consistent with the current Taylor–Green Q9 bulk viscosity:
 
-La priorité suivante n’est donc plus d’ajouter des variantes Taylor–Green, mais de réauditer les cas sensibles — en particulier piston/EOS et surface libre — avec le noyau thermostat/correction de moment désormais corrigé.
+```text
+nu_TG,Q9 ≈ 0.0205
+```
+
+The `64 x 96` runs still show a small positive acceleration ratio, so they should be considered not fully converged yet. They are stable and physically consistent, but a longer run is recommended for final confirmation.
+
+---
+
+## 7. Important interpretation
+
+The old Poiseuille wall model was not valid as a no-slip benchmark: classic, Q6 and Q9 all showed excessive global acceleration, with approximately:
+
+```text
+d<ux>/dt / bodyForceX ≈ 0.8
+```
+
+After wallVP-v2, the acceleration ratio is reduced to a few percent. Therefore:
+
+```text
+Poiseuille before wallVP-v2 was not a reliable viscosity benchmark.
+Poiseuille with wallVP-v2 is now consistent with Taylor–Green after Ny scaling.
+```
+
+Taylor–Green remains the cleanest bulk-viscosity benchmark because it is periodic and does not involve walls.
+
+Poiseuille now validates:
+
+1. the wall model,
+2. the no-slip momentum balance,
+3. the compatibility of Q9 with bounded domains,
+4. the consistency of wall-bounded viscosity with periodic bulk viscosity.
+
+---
+
+## 8. Visualization policy
+
+Visualizations are enabled by default in validation scripts.
+
+This is intentional: live plots of
+
+```text
+meanUx
+Ucenter - Uwall
+Umax
+acceleration ratio
+low-k density
+kBT
+Poiseuille profile
+Taylor–Green amplitude/coherence
+```
+
+are essential to detect slow drifts, non-stationarity and wall problems early.
+
+To disable visualization explicitly:
+
+```matlab
+params.visualEnable = false;
+```
+
+---
+
+## 9. Minimal clean script set
+
+The clean repository should contain only the scripts required for Taylor–Green and Poiseuille validation.
+
+### Main scripts
+
+```text
+run_projection_forced_taylor_green_demo.m
+run_projection_poiseuille_medium64_demo.m
+run_q9_forced_taylor_green_validation.m
+run_q9_poiseuille_wall_virtual_particles_validation.m
+run_q9_poiseuille_wallvp_v2_q9_height_campaign.m
+postprocess_poiseuille_campaign_scaling.m
+```
+
+### Poiseuille-specific scripts
+
+```text
+projection_initialize_particles_poiseuille.m
+mpcd_step_classic_poiseuille.m
+mpcd_step_projection_poiseuille_q9.m
+mpcd_apply_q9_projection_channel.m
+mpcd_apply_wall_bc_y.m
+mpcd_srd_collision_channel_virtual_walls.m
+projection_project_grid_periodic_x_neumann_y.m
+projection_project_mass_flux_channel_operator.m
+projection_project_mass_flux_general_bc.m
+projection_project_mass_flux_periodic_x_neumann_y.m
+analyze_projection_poiseuille_viscosity.m
+poiseuille_acceleration_diagnostics.m
+projection_poiseuille_visualize_frame.m
+```
+
+### Taylor–Green-specific scripts
+
+```text
+projection_initialize_particles_taylor_green_forced.m
+mpcd_step_classic_periodic_forced.m
+mpcd_step_projection_periodic_q9_forced.m
+mpcd_apply_q9_projection_periodic.m
+projection_apply_taylor_green_forcing.m
+projection_project_grid_periodic_fft.m
+projection_project_mass_flux_periodic_fft.m
+projection_fit_forced_taylor_green_viscosity.m
+projection_taylor_green_diagnostics.m
+projection_taylor_green_mode_at_points.m
+projection_taylor_green_visualize_frame.m
+```
+
+### Shared scripts
+
+```text
+projection_apply_cell_thermostat.m
+projection_apply_global_momentum_correction.m
+projection_deposit_particles_to_grid.m
+projection_interpolate_grid_delta_to_particles.m
+projection_population_diagnostics.m
+projection_thermal_diagnostics.m
+```
+
+---
+
+## 10. Recommended next validation steps
+
+1. Keep Q9 Taylor–Green as the bulk reference:
+
+```text
+nu_TG,Q9 ≈ 0.0205
+```
+
+2. Use Q9 Poiseuille `48 x 64` wallVP-v2 as the current wall-bounded reference:
+
+```text
+nu_scaled ≈ 0.0211
+```
+
+3. Later, relaunch a longer Q9 `64 x 96` Poiseuille run to confirm asymptotic convergence.
+
+4. When moving toward C++/OpenMP, preserve the following design principles:
+
+```text
+- virtual wall particles must enter the collision average only;
+- they must not be stored as real particles;
+- Q9 must preserve global momentum correction;
+- wall/boundary handling should remain parameter-driven;
+- visual diagnostics should remain available by default during validation.
+```

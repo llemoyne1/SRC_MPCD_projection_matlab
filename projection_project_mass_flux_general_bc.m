@@ -644,12 +644,65 @@ switch filterLower
     case {"none", "off", "identity", "raw"}
         target = targetRaw;
     case {"elliptic_lowpass", "operator_lowpass", "lowpass_operator", ...
-          "lowpass_fft", "lowk", "fft_lowk"}
+          "lowpass_elliptic", "lowk_elliptic"}
         target = elliptic_lowpass_filter(targetRaw, A0, params, lowKMaxIndex, dx, dy, bc);
+    case {"periodic_fft_lowk", "fft_lowk", "lowpass_fft", "lowk", ...
+          "fft_lowk_exact", "periodic_lowpass_fft"}
+        target = periodic_fft_lowk_filter_vec(targetRaw, params, lowKMaxIndex, bc);
     otherwise
         error('Unknown massFluxTargetFilter for general BC operator: %s', targetFilter);
 end
 target = enforce_rhs_compatibility(target, bc, has_only_neumann_like_bc(bc));
+end
+
+
+function filtered = periodic_fft_lowk_filter_vec(raw, params, lowKMaxIndex, bc)
+%PERIODIC_FFT_LOWK_FILTER_VEC Exact idempotent low-k FFT mask for fully periodic checks.
+%
+% This diagnostic filter intentionally reproduces the low-k mask used by
+% projection_project_mass_flux_periodic_fft while keeping the FV/general-BC
+% elliptic solve for the correction.  It is useful for separating two issues:
+%   (i) target subspace/filter differences,
+%   (ii) elliptic inverse/discrete-gradient differences.
+% It is only valid when both directions are periodic.
+
+if ~is_fully_periodic_bc(bc)
+    error('periodic_fft_lowk target filter requires fully periodic mass-flux BCs.');
+end
+raw = double(raw(:));
+Nx = get_param_default(params, 'Nx', []);
+Ny = get_param_default(params, 'Ny', []);
+if isempty(Nx) || isempty(Ny) || Nx*Ny ~= numel(raw)
+    n = round(sqrt(numel(raw)));
+    if n*n ~= numel(raw)
+        error('Cannot infer periodic FFT filter grid size. Provide params.Nx and params.Ny.');
+    end
+    Nx = n;
+    Ny = n;
+end
+R = reshape(raw, [Nx, Ny]);
+mask = make_periodic_low_k_mask(Nx, Ny, lowKMaxIndex);
+mask(1,1) = false;
+H = fft2(R);
+H(~mask) = 0;
+H(1,1) = 0;
+filtered = real(ifft2(H));
+filtered = filtered(:);
+filtered = filtered - mean(filtered);
+end
+
+function tf = is_fully_periodic_bc(bc)
+tf = strcmp(bc.left.type,'periodic') && strcmp(bc.right.type,'periodic') && ...
+     strcmp(bc.bottom.type,'periodic') && strcmp(bc.top.type,'periodic');
+end
+
+function mask = make_periodic_low_k_mask(Nx, Ny, kmax)
+ix = [0:floor(Nx/2), -ceil(Nx/2)+1:-1];
+iy = [0:floor(Ny/2), -ceil(Ny/2)+1:-1];
+if numel(ix) > Nx, ix = ix(1:Nx); end
+if numel(iy) > Ny, iy = iy(1:Ny); end
+[KX, KY] = ndgrid(ix, iy);
+mask = sqrt(double(KX).^2 + double(KY).^2) <= double(kmax);
 end
 
 function filtered = elliptic_lowpass_filter(raw, A0, params, lowKMaxIndex, dx, dy, bc)

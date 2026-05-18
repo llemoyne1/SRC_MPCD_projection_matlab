@@ -15,6 +15,7 @@ massFluxApplyAfterVelocityProjection = logical(get_param(params, 'massFluxApplyA
 massFluxFinalVelocityProjectionCleanup = logical(get_param(params, 'massFluxFinalVelocityProjectionCleanup', false));
 massFluxFinalVelocityProjectionStrength = get_param(params, 'massFluxFinalVelocityProjectionStrength', 1.0);
 useMassFluxProjection = ~strcmpi(strrep(massFluxProjectionMode, '-', '_'), 'off');
+massFluxProjectionOperator = char(string(get_param(params, 'massFluxProjectionOperator', 'periodic_fft')));
 projectionInterpolationMethod = char(string(get_param(params, 'projectionInterpolationMethod', 'nearest')));
 thermostatAfterProjection = logical(get_param(params, 'thermostatAfterProjection', ...
     get_param(params, 'thermostatAfterStep', false))); % common TG post-step thermostat flag
@@ -59,8 +60,8 @@ if useMassFluxProjection
 
         GforMassFlux = projection_deposit_particles_to_grid(stateForMassFlux.x, stateForMassFlux.v, params, ...
             'periodicX', true, 'periodicY', true, 'minCount', 1);
-        massFluxProj = projection_project_mass_flux_periodic_fft(GforMassFlux.N, GforMassFlux.Ux, GforMassFlux.Uy, params, ...
-            'mode', massFluxProjectionMode, 'relaxationBeta', massFluxDensityRelaxationBeta);
+        massFluxProj = project_periodic_mass_flux_with_selected_operator(GforMassFlux.N, GforMassFlux.Ux, GforMassFlux.Uy, params, ...
+            massFluxProjectionOperator, massFluxProjectionMode, massFluxDensityRelaxationBeta);
         if projectionEnable && massFluxProjectionStrength ~= 0
             dvMassFlux = projection_interpolate_grid_delta_to_particles(stateForMassFlux.x, massFluxProj.dUx, massFluxProj.dUy, params, ...
                 'periodicX', true, 'periodicY', true, 'method', projectionInterpolationMethod);
@@ -72,8 +73,8 @@ if useMassFluxProjection
             projection_apply_global_momentum_correction(stateForMassFlux.v, dvMassFluxApplied, params, 'stage', 'q9');
     else
         projectionKind = 'mass_flux';
-        massFluxProj = projection_project_mass_flux_periodic_fft(Gbefore.N, Gbefore.Ux, Gbefore.Uy, params, ...
-            'mode', massFluxProjectionMode, 'relaxationBeta', massFluxDensityRelaxationBeta);
+        massFluxProj = project_periodic_mass_flux_with_selected_operator(Gbefore.N, Gbefore.Ux, Gbefore.Uy, params, ...
+            massFluxProjectionOperator, massFluxProjectionMode, massFluxDensityRelaxationBeta);
         if projectionEnable && massFluxProjectionStrength ~= 0
             dv = projection_interpolate_grid_delta_to_particles(stateClassic.x, massFluxProj.dUx, massFluxProj.dUy, params, ...
                 'periodicX', true, 'periodicY', true, 'method', projectionInterpolationMethod);
@@ -152,6 +153,7 @@ if ~computeDiagnostics
         massFluxProjectionMode, massFluxProjectionStrength, massFluxDensityRelaxationBeta, appliedProjectionStrength, ...
         massFluxApplyAfterVelocityProjection, massFluxFinalVelocityProjectionCleanup, massFluxFinalVelocityProjectionStrength, ...
         finalVelocityCleanup, momentumCorrectionInfo, stateOut.v - stateClassic.v);
+    diag.massFluxProjectionOperator = canonical_mass_flux_operator(massFluxProjectionOperator);
     return;
 end
 
@@ -163,8 +165,8 @@ Gafter = projection_deposit_particles_to_grid(stateOut.x, stateOut.v, params, ..
     'periodicX', true, 'periodicY', true, 'minCount', 1);
 projAfterParticles = projection_project_grid_periodic_fft(Gafter.Ux, Gafter.Uy, params);
 if useMassFluxProjection
-    massFluxAfterParticles = projection_project_mass_flux_periodic_fft(Gafter.N, Gafter.Ux, Gafter.Uy, params, ...
-        'mode', massFluxProjectionMode, 'relaxationBeta', massFluxDensityRelaxationBeta);
+    massFluxAfterParticles = project_periodic_mass_flux_with_selected_operator(Gafter.N, Gafter.Ux, Gafter.Uy, params, ...
+        massFluxProjectionOperator, massFluxProjectionMode, massFluxDensityRelaxationBeta);
 else
     massFluxAfterParticles = empty_mass_flux_projection();
 end
@@ -174,6 +176,7 @@ diag = minimal_diag(proj, massFluxProj, thermostatInfo, projectionEnable, projec
     massFluxProjectionMode, massFluxProjectionStrength, massFluxDensityRelaxationBeta, appliedProjectionStrength, ...
     massFluxApplyAfterVelocityProjection, massFluxFinalVelocityProjectionCleanup, massFluxFinalVelocityProjectionStrength, ...
     finalVelocityCleanup, momentumCorrectionInfo, dvTotal);
+diag.massFluxProjectionOperator = canonical_mass_flux_operator(massFluxProjectionOperator);
 diag.computeDiagnostics = true;
 diag.rmsDivParticleAfter = projAfterParticles.rmsDivBefore;
 diag.maxAbsDivParticleAfter = projAfterParticles.maxAbsDivBefore;
@@ -193,6 +196,67 @@ diag.projAfterParticles = projAfterParticles;
 diag.massFluxAfterParticles = massFluxAfterParticles;
 diag.momBefore = mean(stateClassic.v, 1, 'omitnan');
 diag.momAfter = mean(stateOut.v, 1, 'omitnan');
+end
+
+
+function proj = project_periodic_mass_flux_with_selected_operator(N, Ux, Uy, params, operatorName, mode, beta)
+%PROJECT_PERIODIC_MASS_FLUX_WITH_SELECTED_OPERATOR Dispatch periodic Q9 mass-flux projection.
+%
+% Historical Taylor--Green runs use the FFT periodic projector.  This
+% dispatcher also allows the finite-volume/general-BC elliptic projector to
+% be exercised on a fully periodic domain, which is useful for checking the
+% consistency of the future unified operator path.
+
+op = canonical_mass_flux_operator(operatorName);
+switch op
+    case 'periodic_fft'
+        proj = projection_project_mass_flux_periodic_fft(N, Ux, Uy, params, ...
+            'mode', mode, 'relaxationBeta', beta);
+        proj.operator = op;
+    case 'general_bc_periodic'
+        p = params;
+        % Force a fully periodic descriptor, independent of the Poiseuille
+        % defaults used inside projection_project_mass_flux_general_bc.
+        p.massFluxBC = struct();
+        p.massFluxBC.left = 'periodic';
+        p.massFluxBC.right = 'periodic';
+        p.massFluxBC.bottom = 'periodic';
+        p.massFluxBC.top = 'periodic';
+        p.massFluxBCLeft = 'periodic';
+        p.massFluxBCRight = 'periodic';
+        p.massFluxBCBottom = 'periodic';
+        p.massFluxBCTop = 'periodic';
+        p.boundary_left = 'periodic';
+        p.boundary_right = 'periodic';
+        p.boundary_bottom = 'periodic';
+        p.boundary_top = 'periodic';
+        if ~isfield(p, 'massFluxTargetFilter') || isempty(p.massFluxTargetFilter)
+            p.massFluxTargetFilter = 'elliptic_lowpass';
+        end
+        if ~isfield(p, 'massFluxEllipticAlphaMode') || isempty(p.massFluxEllipticAlphaMode)
+            p.massFluxEllipticAlphaMode = 'constant';
+        end
+        if ~isfield(p, 'massFluxEllipticUseSolveCache') || isempty(p.massFluxEllipticUseSolveCache)
+            p.massFluxEllipticUseSolveCache = true;
+        end
+        proj = projection_project_mass_flux_general_bc(N, Ux, Uy, p, ...
+            'mode', mode, 'relaxationBeta', beta);
+        proj.operator = op;
+    otherwise
+        error('Unsupported massFluxProjectionOperator: %s', operatorName);
+end
+end
+
+function op = canonical_mass_flux_operator(operatorName)
+op = lower(strrep(char(string(operatorName)), '-', '_'));
+switch op
+    case {'periodic_fft','fft','fft_periodic','spectral','spectral_fft'}
+        op = 'periodic_fft';
+    case {'general_bc','general','elliptic','finite_volume','fv','general_bc_periodic','periodic_general_bc'}
+        op = 'general_bc_periodic';
+    otherwise
+        error('Unknown massFluxProjectionOperator: %s', operatorName);
+end
 end
 
 function info = init_momentum_correction_info(params)

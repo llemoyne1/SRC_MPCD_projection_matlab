@@ -33,6 +33,9 @@ addParameter(p, 'accelerationWindowTime', 5);
 addParameter(p, 'nuReferenceNy', 64);
 addParameter(p, 'nuScalingEnable', true);
 addParameter(p, 'physicalLy', []);
+addParameter(p, 'massFluxProjectionOperator', 'general_bc');
+addParameter(p, 'massFluxTargetFilter', 'elliptic_lowpass');
+addParameter(p, 'massFluxFinalVelocityProjectionCleanup', false);
 parse(p, varargin{:});
 
 methods = cellstr(p.Results.methods);
@@ -79,8 +82,9 @@ for im = 1:numel(methods)
     params.visualReferenceNu = p.Results.nuGuess;
 
     if strcmp(method, 'q9')
-        params.massFluxProjectionOperator = 'general_bc';
-        params.massFluxFinalVelocityProjectionCleanup = false;
+        params.massFluxProjectionOperator = char(string(p.Results.massFluxProjectionOperator));
+        params.massFluxTargetFilter = char(string(p.Results.massFluxTargetFilter));
+        params.massFluxFinalVelocityProjectionCleanup = logical(p.Results.massFluxFinalVelocityProjectionCleanup);
     end
 
     fprintf('\n=== Wall VP v2 validation: %s ===\n', upper(method));

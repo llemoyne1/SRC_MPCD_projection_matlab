@@ -240,7 +240,8 @@ params = set_default(params,'massFluxProjectionMode','relax_to_uniform_lowk');
 params = set_default(params,'massFluxProjectionStrength',1.0);
 params = set_default(params,'massFluxDensityRelaxationBeta',5e-4);
 params = set_default(params,'massFluxApplyAfterVelocityProjection',true);
-params = set_default(params,'massFluxTargetFilter','lowpass_fft');
+params = set_default(params,'massFluxProjectionOperator','general_bc');
+params = set_default(params,'massFluxTargetFilter','elliptic_lowpass');
 params = set_default(params,'massFluxLowKMaxIndex',2);
 params = set_default(params,'massFluxProjectionRegularization',1e-12);
 params = set_default(params,'massFluxMinCellCount',1.0);
@@ -335,7 +336,12 @@ switch method
         params.massFluxProjectionMode = 'relax_to_uniform_lowk';
         params.massFluxProjectionStrength = 1.0;
         params.massFluxApplyAfterVelocityProjection = true;
-        params.massFluxTargetFilter = 'lowpass_fft';
+        if ~isfield(params,'massFluxProjectionOperator') || isempty(params.massFluxProjectionOperator)
+            params.massFluxProjectionOperator = 'general_bc';
+        end
+        if ~isfield(params,'massFluxTargetFilter') || isempty(params.massFluxTargetFilter)
+            params.massFluxTargetFilter = 'elliptic_lowpass';
+        end
         if ~isfield(params,'massFluxFinalVelocityProjectionCleanup') || isempty(params.massFluxFinalVelocityProjectionCleanup)
             params.massFluxFinalVelocityProjectionCleanup = true;
         end

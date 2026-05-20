@@ -38,6 +38,13 @@ Ly = get_param(params, 'Ly', 1.0);
 Nx = get_param(params, 'Nx', 1);
 Ny = get_param(params, 'Ny', 1);
 alphaDeg = get_param(params, 'alphaDeg', 90);
+dt = get_param(params, 'dt', NaN);
+if ~isfinite(dt) || dt <= 0
+    % Keep the collision kernel usable even if called outside a time-step
+    % driver.  The impulse diagnostics remain valid; pressure conversion is
+    % disabled by returning NaN pressures instead of crashing.
+    dt = NaN;
+end
 
 if Lx <= 0 || Ly <= 0 || Nx <= 0 || Ny <= 0
     error('Invalid grid/domain parameters.');
@@ -126,8 +133,10 @@ Uy(occTot) = PyTot(occTot) ./ Ntot(occTot);
 alpha = alphaDeg * pi / 180.0;
 signs = 2.0 * (rand(Nc, 1) > 0.5) - 1.0;
 angles = signs * alpha;
-ca = cos(angles(cellId));
-sa = sin(angles(cellId));
+caCell = cos(angles);
+saCell = sin(angles);
+ca = caCell(cellId);
+sa = saCell(cellId);
 
 uxp = Ux(cellId);
 uyp = Uy(cellId);
@@ -137,6 +146,25 @@ rvy = v(:, 2) - uyp;
 vOut = v;
 vOut(:, 1) = uxp + ca .* rvx - sa .* rvy;
 vOut(:, 2) = uyp + sa .* rvx + ca .* rvy;
+
+% Virtual-wall mechanical diagnostics.
+% The collision conserves total real+virtual cell momentum.  Therefore the
+% impulse exerted by the fluid on a virtual wall is the momentum increment
+% of the corresponding virtual aggregate during the SRD rotation.  This is
+% the wall-side counterpart of the impulse applied to the real particles.
+wallVPDiag = virtual_wall_impulse_diagnostics(virtInfo, Ux, Uy, caCell, saCell, dt, Lx);
+virtInfo.impulseTopWallVPy = wallVPDiag.impulseTopWallVPy;
+virtInfo.impulseBottomWallVPy = wallVPDiag.impulseBottomWallVPy;
+virtInfo.pressureTopWallVP = wallVPDiag.pressureTopWallVP;
+virtInfo.pressureBottomWallVP = wallVPDiag.pressureBottomWallVP;
+virtInfo.pressureTopWallVPSigned = wallVPDiag.pressureTopWallVPSigned;
+virtInfo.pressureBottomWallVPSigned = wallVPDiag.pressureBottomWallVPSigned;
+virtInfo.pressureTopWallVPPositiveCompression = wallVPDiag.pressureTopWallVPPositiveCompression;
+virtInfo.pressureBottomWallVPPositiveCompression = wallVPDiag.pressureBottomWallVPPositiveCompression;
+virtInfo.pressureTopWallVPFlippedSign = wallVPDiag.pressureTopWallVPFlippedSign;
+virtInfo.pressureBottomWallVPFlippedSign = wallVPDiag.pressureBottomWallVPFlippedSign;
+virtInfo.impulseOnFluidFromTopWallVPy = wallVPDiag.impulseOnFluidFromTopWallVPy;
+virtInfo.impulseOnFluidFromBottomWallVPy = wallVPDiag.impulseOnFluidFromBottomWallVPy;
 
 info = struct();
 info.Nx = Nx;
@@ -161,6 +189,19 @@ info.PxVirtual = PxVirt;
 info.PyVirtual = PyVirt;
 info.alphaDeg = alphaDeg;
 info.wallVirtualParticles = virtInfo;
+info.impulseTopWallVPy = wallVPDiag.impulseTopWallVPy;
+info.impulseBottomWallVPy = wallVPDiag.impulseBottomWallVPy;
+info.pressureTopWallVP = wallVPDiag.pressureTopWallVP;
+info.pressureBottomWallVP = wallVPDiag.pressureBottomWallVP;
+info.pressureTopWallVPSigned = wallVPDiag.pressureTopWallVPSigned;
+info.pressureBottomWallVPSigned = wallVPDiag.pressureBottomWallVPSigned;
+info.pressureTopWallVPPositiveCompression = wallVPDiag.pressureTopWallVPPositiveCompression;
+info.pressureBottomWallVPPositiveCompression = wallVPDiag.pressureBottomWallVPPositiveCompression;
+info.pressureTopWallVPFlippedSign = wallVPDiag.pressureTopWallVPFlippedSign;
+info.pressureBottomWallVPFlippedSign = wallVPDiag.pressureBottomWallVPFlippedSign;
+info.impulseOnFluidFromTopWallVPy = wallVPDiag.impulseOnFluidFromTopWallVPy;
+info.impulseOnFluidFromBottomWallVPy = wallVPDiag.impulseOnFluidFromBottomWallVPy;
+info.virtualWallImpulseDiagnostics = wallVPDiag;
 info.NMeanReal = mean(double(Nreal), 'omitnan');
 info.NStdReal = std(double(Nreal), 0, 'omitnan');
 info.NMinReal = min(Nreal);
@@ -189,6 +230,12 @@ function [Nvirt, PxVirt, PyVirt, info] = virtual_wall_moments_shifted_solid_frac
 Nvirt = zeros(Nc, 1);
 PxVirt = zeros(Nc, 1);
 PyVirt = zeros(Nc, 1);
+NvirtBottom = zeros(Nc, 1);
+PxVirtBottom = zeros(Nc, 1);
+PyVirtBottom = zeros(Nc, 1);
+NvirtTop = zeros(Nc, 1);
+PxVirtTop = zeros(Nc, 1);
+PyVirtTop = zeros(Nc, 1);
 
 enabled = logical(get_param(params, 'wallVirtualParticlesEnable', false));
 info = empty_virtual_info(enabled, 'shifted_solid_fraction');
@@ -234,14 +281,20 @@ for ix = 1:Nx
         id = (jyRaw + 1) + Ncy * (ix - 1);
         if includeBottom && bottomFrac > 0
             nAdd = sample_virtual_count(fullCellCount * bottomFrac, stochasticCount);
-            [Nvirt, PxVirt, PyVirt] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, id, nAdd, Ubottom, Vbottom, sigma, thermal);
+            [Nvirt, PxVirt, PyVirt, pxAdd, pyAdd] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, id, nAdd, Ubottom, Vbottom, sigma, thermal);
+            NvirtBottom(id) = NvirtBottom(id) + nAdd;
+            PxVirtBottom(id) = PxVirtBottom(id) + pxAdd;
+            PyVirtBottom(id) = PyVirtBottom(id) + pyAdd;
             info.bottomSolidVolumeCells = info.bottomSolidVolumeCells + bottomFrac;
             info.nBottomVirtualParticles = info.nBottomVirtualParticles + nAdd;
             if nAdd > 0, info.nBottomCells = info.nBottomCells + 1; end
         end
         if includeTop && topFrac > 0
             nAdd = sample_virtual_count(fullCellCount * topFrac, stochasticCount);
-            [Nvirt, PxVirt, PyVirt] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, id, nAdd, Utop, Vtop, sigma, thermal);
+            [Nvirt, PxVirt, PyVirt, pxAdd, pyAdd] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, id, nAdd, Utop, Vtop, sigma, thermal);
+            NvirtTop(id) = NvirtTop(id) + nAdd;
+            PxVirtTop(id) = PxVirtTop(id) + pxAdd;
+            PyVirtTop(id) = PyVirtTop(id) + pyAdd;
             info.topSolidVolumeCells = info.topSolidVolumeCells + topFrac;
             info.nTopVirtualParticles = info.nTopVirtualParticles + nAdd;
             if nAdd > 0, info.nTopCells = info.nTopCells + 1; end
@@ -252,12 +305,24 @@ end
 info.nVirtualTotal = sum(Nvirt, 'omitnan');
 info.PxVirtualTotal = sum(PxVirt, 'omitnan');
 info.PyVirtualTotal = sum(PyVirt, 'omitnan');
+info.NBottomCellVirtual = NvirtBottom;
+info.PxBottomCellVirtual = PxVirtBottom;
+info.PyBottomCellVirtual = PyVirtBottom;
+info.NTopCellVirtual = NvirtTop;
+info.PxTopCellVirtual = PxVirtTop;
+info.PyTopCellVirtual = PyVirtTop;
 end
 
 function [Nvirt, PxVirt, PyVirt, info] = virtual_wall_moments_fixed_layers(params, Nx, Ny, Nc)
 Nvirt = zeros(Nc, 1);
 PxVirt = zeros(Nc, 1);
 PyVirt = zeros(Nc, 1);
+NvirtBottom = zeros(Nc, 1);
+PxVirtBottom = zeros(Nc, 1);
+PyVirtBottom = zeros(Nc, 1);
+NvirtTop = zeros(Nc, 1);
+PxVirtTop = zeros(Nc, 1);
+PyVirtTop = zeros(Nc, 1);
 
 enabled = logical(get_param(params, 'wallVirtualParticlesEnable', false));
 info = empty_virtual_info(enabled, 'fixed_boundary_layers');
@@ -300,7 +365,11 @@ topLayers = max(1, Ny-nLayers+1):Ny;
 if includeBottom
     ids = wall_cell_ids(Nx, Ny, bottomLayers);
     for k = 1:numel(ids)
-        [Nvirt, PxVirt, PyVirt] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, ids(k), nPerCell, Ubottom, Vbottom, sigma, thermal);
+        id = ids(k);
+        [Nvirt, PxVirt, PyVirt, pxAdd, pyAdd] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, id, nPerCell, Ubottom, Vbottom, sigma, thermal);
+        NvirtBottom(id) = NvirtBottom(id) + nPerCell;
+        PxVirtBottom(id) = PxVirtBottom(id) + pxAdd;
+        PyVirtBottom(id) = PyVirtBottom(id) + pyAdd;
     end
     info.nBottomCells = info.nBottomCells + numel(ids);
     info.nBottomVirtualParticles = info.nBottomVirtualParticles + nPerCell * numel(ids);
@@ -308,7 +377,11 @@ end
 if includeTop
     ids = wall_cell_ids(Nx, Ny, topLayers);
     for k = 1:numel(ids)
-        [Nvirt, PxVirt, PyVirt] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, ids(k), nPerCell, Utop, Vtop, sigma, thermal);
+        id = ids(k);
+        [Nvirt, PxVirt, PyVirt, pxAdd, pyAdd] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, id, nPerCell, Utop, Vtop, sigma, thermal);
+        NvirtTop(id) = NvirtTop(id) + nPerCell;
+        PxVirtTop(id) = PxVirtTop(id) + pxAdd;
+        PyVirtTop(id) = PyVirtTop(id) + pyAdd;
     end
     info.nTopCells = info.nTopCells + numel(ids);
     info.nTopVirtualParticles = info.nTopVirtualParticles + nPerCell * numel(ids);
@@ -316,6 +389,12 @@ end
 info.nVirtualTotal = sum(Nvirt, 'omitnan');
 info.PxVirtualTotal = sum(PxVirt, 'omitnan');
 info.PyVirtualTotal = sum(PyVirt, 'omitnan');
+info.NBottomCellVirtual = NvirtBottom;
+info.PxBottomCellVirtual = PxVirtBottom;
+info.PyBottomCellVirtual = PyVirtBottom;
+info.NTopCellVirtual = NvirtTop;
+info.PxTopCellVirtual = PxVirtTop;
+info.PyTopCellVirtual = PyVirtTop;
 end
 
 function n = sample_virtual_count(lambda, stochasticCount)
@@ -329,7 +408,9 @@ else
 end
 end
 
-function [Nvirt, PxVirt, PyVirt] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, id, nAdd, Uwall, Vwall, sigma, thermal)
+function [Nvirt, PxVirt, PyVirt, PxAdd, PyAdd] = add_virtual_to_cell(Nvirt, PxVirt, PyVirt, id, nAdd, Uwall, Vwall, sigma, thermal)
+PxAdd = 0.0;
+PyAdd = 0.0;
 if nAdd <= 0
     return;
 end
@@ -372,6 +453,112 @@ info.topSolidVolumeCells = 0.0;
 info.nVirtualTotal = 0;
 info.PxVirtualTotal = 0.0;
 info.PyVirtualTotal = 0.0;
+info.NBottomCellVirtual = [];
+info.PxBottomCellVirtual = [];
+info.PyBottomCellVirtual = [];
+info.NTopCellVirtual = [];
+info.PxTopCellVirtual = [];
+info.PyTopCellVirtual = [];
+info.impulseTopWallVPy = 0.0;
+info.impulseBottomWallVPy = 0.0;
+info.pressureTopWallVP = 0.0;
+info.pressureBottomWallVP = 0.0;
+info.pressureTopWallVPSigned = 0.0;
+info.pressureBottomWallVPSigned = 0.0;
+info.pressureTopWallVPPositiveCompression = 0.0;
+info.pressureBottomWallVPPositiveCompression = 0.0;
+info.pressureTopWallVPFlippedSign = 0.0;
+info.pressureBottomWallVPFlippedSign = 0.0;
+end
+
+
+function diag = virtual_wall_impulse_diagnostics(virtInfo, Ux, Uy, caCell, saCell, dt, Lx)
+%VIRTUAL_WALL_IMPULSE_DIAGNOSTICS Reconstruct mechanical wallVP impulses.
+%
+% The virtual particles are stored only as per-cell aggregate counts and
+% momenta.  Since the SRD rotation is linear around the cell center of mass,
+% the post-collision virtual aggregate momentum can be reconstructed exactly
+% from the same cell velocity and rotation angle used for real particles.
+%
+% By total real+virtual momentum conservation in each cell,
+%   Delta P_real_side = - Delta P_virtual_side.
+% The impulse exerted by the fluid on the wall side is therefore
+%   impulse_wall_by_fluid = Delta P_virtual_side.
+% This sign convention matches apply_piston_wall_bc_y(), where top-wall
+% pressure is positive when the fluid pushes upward on the top wall.
+
+diag = struct();
+[diag.impulseBottomWallVPx, diag.impulseBottomWallVPy, diag.nBottomVirtualParticles] = ...
+    virtual_side_delta(virtInfo, 'Bottom', Ux, Uy, caCell, saCell);
+[diag.impulseTopWallVPx, diag.impulseTopWallVPy, diag.nTopVirtualParticles] = ...
+    virtual_side_delta(virtInfo, 'Top', Ux, Uy, caCell, saCell);
+
+if isfinite(dt) && dt > 0 && isfinite(Lx) && Lx > 0
+    denom = max(dt * Lx, eps);
+    diag.pressureTopWallVPSigned = diag.impulseTopWallVPy / denom;
+    diag.pressureBottomWallVPSigned = diag.impulseBottomWallVPy / denom;
+else
+    diag.pressureTopWallVPSigned = NaN;
+    diag.pressureBottomWallVPSigned = NaN;
+end
+
+% Sign diagnostics.  The signed quantities are the raw y-components of the
+% virtual-wall impulse divided by area*dt.  For a scalar compression pressure,
+% positive means "the fluid pushes on the confining wall": upward on the top
+% wall and downward on the bottom wall.  The flipped-sign fields are kept to
+% diagnose sign-convention mistakes without changing the dynamics.
+diag.pressureTopWallVP = diag.pressureTopWallVPSigned;
+diag.pressureBottomWallVP = diag.pressureBottomWallVPSigned;
+diag.pressureTopWallVPPositiveCompression = diag.pressureTopWallVPSigned;
+diag.pressureBottomWallVPPositiveCompression = -diag.pressureBottomWallVPSigned;
+diag.pressureTopWallVPFlippedSign = -diag.pressureTopWallVPSigned;
+diag.pressureBottomWallVPFlippedSign = -diag.pressureBottomWallVPSigned;
+
+diag.impulseOnFluidFromTopWallVPy = -diag.impulseTopWallVPy;
+diag.impulseOnFluidFromBottomWallVPy = -diag.impulseBottomWallVPy;
+diag.pressureTopWallVPAbs = abs(diag.pressureTopWallVPSigned);
+diag.pressureBottomWallVPAbs = abs(diag.pressureBottomWallVPSigned);
+end
+
+function [dPx, dPy, nVirt] = virtual_side_delta(virtInfo, sideName, Ux, Uy, caCell, saCell)
+Nname = ['N' sideName 'CellVirtual'];
+Pxname = ['Px' sideName 'CellVirtual'];
+Pyname = ['Py' sideName 'CellVirtual'];
+if ~isstruct(virtInfo) || ~isfield(virtInfo, Nname) || isempty(virtInfo.(Nname))
+    dPx = 0.0;
+    dPy = 0.0;
+    nVirt = 0.0;
+    return;
+end
+N = double(virtInfo.(Nname));
+Px = double(virtInfo.(Pxname));
+Py = double(virtInfo.(Pyname));
+if isempty(N)
+    dPx = 0.0;
+    dPy = 0.0;
+    nVirt = 0.0;
+    return;
+end
+N = N(:);
+Px = Px(:);
+Py = Py(:);
+Ux = Ux(:);
+Uy = Uy(:);
+caCell = caCell(:);
+saCell = saCell(:);
+mask = N > 0;
+nVirt = sum(N(mask), 'omitnan');
+if ~any(mask)
+    dPx = 0.0;
+    dPy = 0.0;
+    return;
+end
+rx = Px(mask) - N(mask) .* Ux(mask);
+ry = Py(mask) - N(mask) .* Uy(mask);
+PxAfter = N(mask) .* Ux(mask) + caCell(mask) .* rx - saCell(mask) .* ry;
+PyAfter = N(mask) .* Uy(mask) + saCell(mask) .* rx + caCell(mask) .* ry;
+dPx = sum(PxAfter - Px(mask), 'omitnan');
+dPy = sum(PyAfter - Py(mask), 'omitnan');
 end
 
 function validate_state_arrays(x, v)

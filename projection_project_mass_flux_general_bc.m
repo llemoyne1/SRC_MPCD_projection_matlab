@@ -130,9 +130,28 @@ else
     rhsRequested = rhsFull;
 end
 rhs = enforce_rhs_compatibility(rhsRequested, bc, has_only_neumann_like_bc(bc));
+rhsSolve = apply_mode0_gauge_rhs(rhs, solverInfo);
 
-[phi, solveInfo] = solve_projection_system(A, rhs, solverMode, tol, maxIter, ...
+[phi, solveInfo] = solve_projection_system(A, rhsSolve, solverMode, tol, maxIter, ...
     useSolveCache, factorizationMode, solverInfo.cacheKey);
+if isfield(solverInfo, 'mode0GaugeActive') && solverInfo.mode0GaugeActive
+    % The gauge fixes the additive constant of phi only.  Subtracting the
+    % mean after the solve gives a reproducible zero-mean diagnostic
+    % potential while preserving exactly the correction fluxes.
+    phi = phi - mean(phi);
+    physicalResidual = A0 * phi - rhs;
+    solveInfo.relresPhysical = norm(physicalResidual) / max(norm(rhs), eps);
+    solveInfo.maxAbsPhysicalResidual = max(abs(physicalResidual));
+    solveInfo.mode0GaugeActive = true;
+    solveInfo.mode0GaugeMode = solverInfo.mode0GaugeMode;
+    solveInfo.mode0GaugeIndex = solverInfo.mode0GaugeIndex;
+else
+    solveInfo.relresPhysical = solveInfo.relres;
+    solveInfo.maxAbsPhysicalResidual = NaN;
+    solveInfo.mode0GaugeActive = false;
+    solveInfo.mode0GaugeMode = 'none';
+    solveInfo.mode0GaugeIndex = NaN;
+end
 faceCorr = correction_faces_from_phi(phi, Nx, Ny, dx, dy, bc, alpha);
 faceProjected = faceBase;
 faceProjected.Jx = faceProjected.Jx + faceCorr.Jx;
@@ -392,11 +411,24 @@ function [A0, A, info] = build_or_get_operator(Nx, Ny, dx, dy, bc, alpha, regula
 % For alpha=constant, a small persistent cache avoids rebuilding in long runs.
 % For variable alpha, rebuild: this is a validation implementation.
 useCache = is_uniform_alpha(alpha);
+isClosedNeumannLike = has_only_neumann_like_bc(bc);
+gaugeMode = 'none';
+gaugeIndex = NaN;
+effectiveRegularization = regularization;
+if isClosedNeumannLike
+    % Closed periodic/Neumann-like operators have an exact constant null mode.
+    % Do not remove it by adding epsilon*I: that changes the elliptic problem
+    % and leaves the matrix numerically ill-conditioned.  Instead, fix the
+    % additive constant of the potential by pinning one cell.
+    gaugeMode = 'pin_first_cell';
+    gaugeIndex = 1;
+    effectiveRegularization = 0.0;
+end
 key = '';
 persistent cache
 if useCache
-    key = sprintf('Nx%d_Ny%d_dx%.17g_dy%.17g_bc%s_reg%.17g_solver%s', ...
-        Nx, Ny, dx, dy, bc_signature(bc), regularization, solverMode);
+    key = sprintf('Nx%d_Ny%d_dx%.17g_dy%.17g_bc%s_regEff%.17g_gauge%s_solver%s', ...
+        Nx, Ny, dx, dy, bc_signature(bc), effectiveRegularization, gaugeMode, solverMode);
     if ~isempty(cache) && isfield(cache, 'key') && strcmp(cache.key, key)
         A0 = cache.A0;
         A = cache.A;
@@ -406,8 +438,10 @@ if useCache
 end
 A0 = build_fv_operator(Nx, Ny, dx, dy, bc, alpha);
 A = A0;
-if regularization > 0
-    A = A + regularization * speye(Nx*Ny);
+if isClosedNeumannLike
+    A = apply_mode0_gauge_operator(A, gaugeIndex);
+elseif effectiveRegularization > 0
+    A = A + effectiveRegularization * speye(Nx*Ny);
 end
 info = struct();
 info.cached = false;
@@ -417,10 +451,39 @@ info.solverMode = solverMode;
 info.bcSignature = bc_signature(bc);
 info.nnz = nnz(A);
 info.regularization = regularization;
-info.hasOnlyNeumannLikeBC = has_only_neumann_like_bc(bc);
+info.effectiveRegularization = effectiveRegularization;
+info.hasOnlyNeumannLikeBC = isClosedNeumannLike;
+info.mode0GaugeActive = isClosedNeumannLike;
+info.mode0GaugeMode = gaugeMode;
+info.mode0GaugeIndex = gaugeIndex;
 if useCache
     info.cached = true;
     cache = struct('key', key, 'A0', A0, 'A', A, 'info', info);
+end
+end
+
+function A = apply_mode0_gauge_operator(A, gaugeIndex)
+%APPLY_MODE0_GAUGE_OPERATOR Pin one potential value for closed Neumann-like BC.
+% This removes only the additive constant null mode of phi.  The correction
+% flux dJ = -alpha grad(phi) is unchanged by the choice of gauge.
+n = size(A, 1);
+if isempty(gaugeIndex) || ~isfinite(gaugeIndex) || gaugeIndex < 1 || gaugeIndex > n
+    error('Invalid mode-0 gauge index.');
+end
+gaugeIndex = round(gaugeIndex);
+A(gaugeIndex, :) = sparse(1, n);
+A(:, gaugeIndex) = sparse(n, 1);
+A(gaugeIndex, gaugeIndex) = 1.0;
+end
+
+function rhsSolve = apply_mode0_gauge_rhs(rhs, solverInfo)
+rhsSolve = rhs;
+if isfield(solverInfo, 'mode0GaugeActive') && solverInfo.mode0GaugeActive
+    idx = solverInfo.mode0GaugeIndex;
+    if isempty(idx) || ~isfinite(idx)
+        error('Missing mode-0 gauge index.');
+    end
+    rhsSolve(round(idx)) = 0.0;
 end
 end
 

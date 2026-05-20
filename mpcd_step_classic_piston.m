@@ -77,8 +77,25 @@ wallInfo.pressureTopWallImpact = wallInfo.pressureTopWall;
 wallInfo.pressureBottomWallImpact = wallInfo.pressureBottomWall;
 wallInfo.pressureTopWallVP = getf(collisionInfo, 'pressureTopWallVP', 0.0);
 wallInfo.pressureBottomWallVP = getf(collisionInfo, 'pressureBottomWallVP', 0.0);
-wallInfo.pressureTopWallTotal = wallInfo.pressureTopWallImpact + wallInfo.pressureTopWallVP;
-wallInfo.pressureBottomWallTotal = wallInfo.pressureBottomWallImpact + wallInfo.pressureBottomWallVP;
+wallInfo.pressureTopWallVPSigned = getf(collisionInfo, 'pressureTopWallVPSigned', wallInfo.pressureTopWallVP);
+wallInfo.pressureBottomWallVPSigned = getf(collisionInfo, 'pressureBottomWallVPSigned', wallInfo.pressureBottomWallVP);
+wallInfo.pressureTopWallVPPositiveCompression = getf(collisionInfo, 'pressureTopWallVPPositiveCompression', wallInfo.pressureTopWallVPSigned);
+wallInfo.pressureBottomWallVPPositiveCompression = getf(collisionInfo, 'pressureBottomWallVPPositiveCompression', -wallInfo.pressureBottomWallVPSigned);
+wallInfo.pressureTopWallVPFlippedSign = getf(collisionInfo, 'pressureTopWallVPFlippedSign', -wallInfo.pressureTopWallVPSigned);
+wallInfo.pressureBottomWallVPFlippedSign = getf(collisionInfo, 'pressureBottomWallVPFlippedSign', -wallInfo.pressureBottomWallVPSigned);
+% Reconstruct all wall totals from the same sampled components.  The default
+% total uses the positive-compression VP convention selected for EOS/wall
+% comparisons.  FlippedVP is kept only as a sign diagnostic.
+wallInfo.pressureTopWallTotal = wallInfo.pressureTopWallImpact + wallInfo.pressureTopWallVPPositiveCompression;
+wallInfo.pressureBottomWallTotal = wallInfo.pressureBottomWallImpact + wallInfo.pressureBottomWallVPPositiveCompression;
+wallInfo.pressureTopWallTotalPositiveCompression = wallInfo.pressureTopWallTotal;
+wallInfo.pressureBottomWallTotalPositiveCompression = wallInfo.pressureBottomWallTotal;
+wallInfo.pressureTopWallTotalFlippedVP = wallInfo.pressureTopWallImpact + wallInfo.pressureTopWallVPFlippedSign;
+wallInfo.pressureBottomWallTotalFlippedVP = wallInfo.pressureBottomWallImpact + wallInfo.pressureBottomWallVPFlippedSign;
+wallInfo.pressureTopWallTotalConsistencyResidual = wallInfo.pressureTopWallTotal - ...
+    (wallInfo.pressureTopWallImpact + wallInfo.pressureTopWallVPPositiveCompression);
+wallInfo.pressureBottomWallTotalConsistencyResidual = wallInfo.pressureBottomWallTotal - ...
+    (wallInfo.pressureBottomWallImpact + wallInfo.pressureBottomWallVPPositiveCompression);
 wallInfo.impulseOnTopWallVPY = getf(collisionInfo, 'impulseTopWallVPy', 0.0);
 wallInfo.impulseOnBottomWallVPY = getf(collisionInfo, 'impulseBottomWallVPy', 0.0);
 wallInfo.impulseOnTopWallTotalY = wallInfo.impulseOnTopWallY + wallInfo.impulseOnTopWallVPY;
@@ -134,10 +151,22 @@ diag.piston = stateOut.piston;
 diag.collisionInfo = collisionInfo;
 diag.pressureTopWallImpact = wallInfo.pressureTopWallImpact;
 diag.pressureTopWallVP = wallInfo.pressureTopWallVP;
+diag.pressureTopWallVPSigned = wallInfo.pressureTopWallVPSigned;
+diag.pressureTopWallVPPositiveCompression = wallInfo.pressureTopWallVPPositiveCompression;
+diag.pressureTopWallVPFlippedSign = wallInfo.pressureTopWallVPFlippedSign;
 diag.pressureTopWallTotal = wallInfo.pressureTopWallTotal;
+diag.pressureTopWallTotalPositiveCompression = wallInfo.pressureTopWallTotalPositiveCompression;
+diag.pressureTopWallTotalFlippedVP = wallInfo.pressureTopWallTotalFlippedVP;
+diag.pressureTopWallTotalConsistencyResidual = wallInfo.pressureTopWallTotalConsistencyResidual;
 diag.pressureBottomWallImpact = wallInfo.pressureBottomWallImpact;
 diag.pressureBottomWallVP = wallInfo.pressureBottomWallVP;
+diag.pressureBottomWallVPSigned = wallInfo.pressureBottomWallVPSigned;
+diag.pressureBottomWallVPPositiveCompression = wallInfo.pressureBottomWallVPPositiveCompression;
+diag.pressureBottomWallVPFlippedSign = wallInfo.pressureBottomWallVPFlippedSign;
 diag.pressureBottomWallTotal = wallInfo.pressureBottomWallTotal;
+diag.pressureBottomWallTotalPositiveCompression = wallInfo.pressureBottomWallTotalPositiveCompression;
+diag.pressureBottomWallTotalFlippedVP = wallInfo.pressureBottomWallTotalFlippedVP;
+diag.pressureBottomWallTotalConsistencyResidual = wallInfo.pressureBottomWallTotalConsistencyResidual;
 diag.pistonPowerOnFluid = wallInfo.pistonPowerOnFluid;
 diag.pistonWorkIncrement = wallInfo.pistonWorkIncrement;
 diag.pistonWorkOnFluidCumulative = wallInfo.pistonWorkOnFluidCumulative;

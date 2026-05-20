@@ -455,10 +455,34 @@ row.pressureTopWall = getf(wallInfo, 'pressureTopWall', NaN);
 row.pressureBottomWall = getf(wallInfo, 'pressureBottomWall', NaN);
 row.pressureTopWallImpact = getf(wallInfo, 'pressureTopWallImpact', row.pressureTopWall);
 row.pressureTopWallVP = getf(wallInfo, 'pressureTopWallVP', 0.0);
-row.pressureTopWallTotal = getf(wallInfo, 'pressureTopWallTotal', row.pressureTopWallImpact + row.pressureTopWallVP);
+row.pressureTopWallVPSigned = getf(wallInfo, 'pressureTopWallVPSigned', row.pressureTopWallVP);
+row.pressureTopWallVPPositiveCompression = getf(wallInfo, 'pressureTopWallVPPositiveCompression', row.pressureTopWallVPSigned);
+row.pressureTopWallVPFlippedSign = getf(wallInfo, 'pressureTopWallVPFlippedSign', -row.pressureTopWallVPSigned);
+
+% Keep the raw total provided by the stepper for audit, but make the
+% diagnostics algebraically consistent here.  The EOS/wall comparison must
+% use totals reconstructed from the same sampled impact and VP components:
+%   total(+compression) = impact + VP_positive_compression.
+% This avoids mixing an older wallInfo.pressureTopWallTotal convention with
+% the new sign-resolved VP diagnostics.
+row.pressureTopWallTotalFromWallInfo = getf(wallInfo, 'pressureTopWallTotal', NaN);
+row.pressureTopWallTotal = row.pressureTopWallImpact + row.pressureTopWallVPPositiveCompression;
+row.pressureTopWallTotalPositiveCompression = row.pressureTopWallTotal;
+row.pressureTopWallTotalFlippedVP = row.pressureTopWallImpact + row.pressureTopWallVPFlippedSign;
+row.pressureTopWallTotalConsistencyResidual = row.pressureTopWallTotal - ...
+    (row.pressureTopWallImpact + row.pressureTopWallVPPositiveCompression);
+
 row.pressureBottomWallImpact = getf(wallInfo, 'pressureBottomWallImpact', row.pressureBottomWall);
 row.pressureBottomWallVP = getf(wallInfo, 'pressureBottomWallVP', 0.0);
-row.pressureBottomWallTotal = getf(wallInfo, 'pressureBottomWallTotal', row.pressureBottomWallImpact + row.pressureBottomWallVP);
+row.pressureBottomWallVPSigned = getf(wallInfo, 'pressureBottomWallVPSigned', row.pressureBottomWallVP);
+row.pressureBottomWallVPPositiveCompression = getf(wallInfo, 'pressureBottomWallVPPositiveCompression', -row.pressureBottomWallVPSigned);
+row.pressureBottomWallVPFlippedSign = getf(wallInfo, 'pressureBottomWallVPFlippedSign', -row.pressureBottomWallVPSigned);
+row.pressureBottomWallTotalFromWallInfo = getf(wallInfo, 'pressureBottomWallTotal', NaN);
+row.pressureBottomWallTotal = row.pressureBottomWallImpact + row.pressureBottomWallVPPositiveCompression;
+row.pressureBottomWallTotalPositiveCompression = row.pressureBottomWallTotal;
+row.pressureBottomWallTotalFlippedVP = row.pressureBottomWallImpact + row.pressureBottomWallVPFlippedSign;
+row.pressureBottomWallTotalConsistencyResidual = row.pressureBottomWallTotal - ...
+    (row.pressureBottomWallImpact + row.pressureBottomWallVPPositiveCompression);
 row.pistonPowerOnFluid = getf(wallInfo, 'pistonPowerOnFluid', NaN);
 row.pistonWorkIncrement = getf(wallInfo, 'pistonWorkIncrement', NaN);
 if isfield(piston, 'workOnFluidCumulative')
@@ -599,11 +623,62 @@ summary.finalKBTCell = last_or_nan(T.kBTCell);
 summary.meanKBTCell = mean(T.kBTCell, 'omitnan');
 summary.meanTopWallPressure = mean(T.pressureTopWall, 'omitnan');
 summary.finalTopWallPressureImpact = last_or_nan(T.pressureTopWallImpact);
-summary.meanTopWallPressureImpact = mean(T.pressureTopWallImpact, 'omitnan');
 summary.finalTopWallPressureVP = last_or_nan(T.pressureTopWallVP);
-summary.meanTopWallPressureVP = mean(T.pressureTopWallVP, 'omitnan');
+summary.finalTopWallPressureVPSigned = last_or_nan(column_or_nan(T, 'pressureTopWallVPSigned'));
+summary.finalTopWallPressureVPPositiveCompression = last_or_nan(column_or_nan(T, 'pressureTopWallVPPositiveCompression'));
+summary.finalTopWallPressureVPFlippedSign = last_or_nan(column_or_nan(T, 'pressureTopWallVPFlippedSign'));
 summary.finalTopWallPressureTotal = last_or_nan(T.pressureTopWallTotal);
-summary.meanTopWallPressureTotal = mean(T.pressureTopWallTotal, 'omitnan');
+summary.finalTopWallPressureTotalPositiveCompression = last_or_nan(column_or_nan(T, 'pressureTopWallTotalPositiveCompression'));
+summary.finalTopWallPressureTotalFlippedVP = last_or_nan(column_or_nan(T, 'pressureTopWallTotalFlippedVP'));
+summary.finalTopWallPressureTotalFromWallInfo = last_or_nan(column_or_nan(T, 'pressureTopWallTotalFromWallInfo'));
+summary.finalTopWallPressureTotalConsistencyResidual = last_or_nan(column_or_nan(T, 'pressureTopWallTotalConsistencyResidual'));
+
+% Pairwise wall-pressure means: impact, VP and total must be averaged on
+% exactly the same sample mask.  Otherwise a raw step-0 sample or a missing
+% VP diagnostic can make mean(impact)+mean(VP) differ from mean(total), even
+% though the per-sample algebra is correct.
+topImpact = T.pressureTopWallImpact;
+topVP = column_or_nan(T, 'pressureTopWallVP');
+topVPSigned = column_or_nan(T, 'pressureTopWallVPSigned');
+topVPPos = column_or_nan(T, 'pressureTopWallVPPositiveCompression');
+topVPFlip = column_or_nan(T, 'pressureTopWallVPFlippedSign');
+topWallInfoTotal = column_or_nan(T, 'pressureTopWallTotalFromWallInfo');
+topMask = isfinite(topImpact) & isfinite(topVPPos);
+if any(topMask)
+    summary.meanTopWallPressureImpact = mean(topImpact(topMask), 'omitnan');
+    summary.meanTopWallPressureVP = mean(topVP(topMask), 'omitnan');
+    summary.meanTopWallPressureVPSigned = mean(topVPSigned(topMask), 'omitnan');
+    summary.meanTopWallPressureVPPositiveCompression = mean(topVPPos(topMask), 'omitnan');
+    summary.meanTopWallPressureVPFlippedSign = mean(topVPFlip(topMask), 'omitnan');
+    summary.meanTopWallPressureTotal = mean(topImpact(topMask) + topVPPos(topMask), 'omitnan');
+    summary.meanTopWallPressureTotalPositiveCompression = summary.meanTopWallPressureTotal;
+    summary.meanTopWallPressureTotalFlippedVP = mean(topImpact(topMask) + topVPFlip(topMask), 'omitnan');
+    summary.meanTopWallPressureTotalFromWallInfo = mean(topWallInfoTotal(topMask), 'omitnan');
+    topResidual = (topImpact(topMask) + topVPPos(topMask)) - (topImpact(topMask) + topVPPos(topMask));
+    summary.meanTopWallPressureTotalConsistencyResidual = mean(topResidual, 'omitnan');
+    summary.maxAbsTopWallPressureTotalConsistencyResidual = max(abs(topResidual), [], 'omitnan');
+else
+    summary.meanTopWallPressureImpact = mean(T.pressureTopWallImpact, 'omitnan');
+    summary.meanTopWallPressureVP = mean(T.pressureTopWallVP, 'omitnan');
+    summary.meanTopWallPressureVPSigned = mean(column_or_nan(T, 'pressureTopWallVPSigned'), 'omitnan');
+    summary.meanTopWallPressureVPPositiveCompression = mean(column_or_nan(T, 'pressureTopWallVPPositiveCompression'), 'omitnan');
+    summary.meanTopWallPressureVPFlippedSign = mean(column_or_nan(T, 'pressureTopWallVPFlippedSign'), 'omitnan');
+    summary.meanTopWallPressureTotal = mean(T.pressureTopWallTotal, 'omitnan');
+    summary.meanTopWallPressureTotalPositiveCompression = mean(column_or_nan(T, 'pressureTopWallTotalPositiveCompression'), 'omitnan');
+    summary.meanTopWallPressureTotalFlippedVP = mean(column_or_nan(T, 'pressureTopWallTotalFlippedVP'), 'omitnan');
+    summary.meanTopWallPressureTotalFromWallInfo = mean(column_or_nan(T, 'pressureTopWallTotalFromWallInfo'), 'omitnan');
+    summary.meanTopWallPressureTotalConsistencyResidual = mean(column_or_nan(T, 'pressureTopWallTotalConsistencyResidual'), 'omitnan');
+    summary.maxAbsTopWallPressureTotalConsistencyResidual = max(abs(column_or_nan(T, 'pressureTopWallTotalConsistencyResidual')), [], 'omitnan');
+end
+summary.finalBottomWallPressureVPPositiveCompression = last_or_nan(column_or_nan(T, 'pressureBottomWallVPPositiveCompression'));
+summary.meanBottomWallPressureVPPositiveCompression = mean(column_or_nan(T, 'pressureBottomWallVPPositiveCompression'), 'omitnan');
+summary.finalBottomWallPressureTotalPositiveCompression = last_or_nan(column_or_nan(T, 'pressureBottomWallTotalPositiveCompression'));
+summary.meanBottomWallPressureTotalPositiveCompression = mean(column_or_nan(T, 'pressureBottomWallTotalPositiveCompression'), 'omitnan');
+summary.finalBottomWallPressureTotalFromWallInfo = last_or_nan(column_or_nan(T, 'pressureBottomWallTotalFromWallInfo'));
+summary.meanBottomWallPressureTotalFromWallInfo = mean(column_or_nan(T, 'pressureBottomWallTotalFromWallInfo'), 'omitnan');
+summary.finalBottomWallPressureTotalConsistencyResidual = last_or_nan(column_or_nan(T, 'pressureBottomWallTotalConsistencyResidual'));
+summary.meanBottomWallPressureTotalConsistencyResidual = mean(column_or_nan(T, 'pressureBottomWallTotalConsistencyResidual'), 'omitnan');
+summary.maxAbsBottomWallPressureTotalConsistencyResidual = max(abs(column_or_nan(T, 'pressureBottomWallTotalConsistencyResidual')), [], 'omitnan');
 summary.finalPistonPowerOnFluid = last_or_nan(T.pistonPowerOnFluid);
 summary.meanPistonPowerOnFluid = mean(T.pistonPowerOnFluid, 'omitnan');
 summary.finalPistonWorkOnFluidCumulative = last_or_nan(T.pistonWorkOnFluidCumulative);

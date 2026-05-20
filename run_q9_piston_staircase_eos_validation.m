@@ -50,7 +50,7 @@ if ~exist(params.outputRoot, 'dir')
     mkdir(params.outputRoot);
 end
 
-runParams = rmfield_if_exists(params, {'compressionLevels','moveSteps','holdSteps','initialHoldSteps','averageHoldFraction','outputRoot','saveOutput'});
+runParams = rmfield_if_exists(params, {'compressionLevels','moveSteps','holdSteps','initialHoldSteps','averageHoldFraction','fitMinSamples','excludeInvalidPlateauxFromFit','outputRoot','saveOutput'});
 
 logFile = fullfile(params.outputRoot, 'console_log.txt');
 diary(logFile);
@@ -61,14 +61,16 @@ fprintf('=== Q9 piston staircase EOS validation ===\n');
 fprintf('compression levels : %s\n', mat2str(levels, 6));
 fprintf('move/hold steps    : %d / %d\n', params.moveSteps, params.holdSteps);
 fprintf('average hold frac  : %.3g\n', params.averageHoldFraction);
+fprintf('fit min samples    : %d\n', params.fitMinSamples);
+fprintf('exclude invalid fit: %d\n', logical(params.excludeInvalidPlateauxFromFit));
 fprintf('Kvirial/beta       : %.6g / %.6g\n', params.Kvirial, params.virialBeta);
 fprintf('limiter frac       : %.6g\n', params.virialMaxDuFractionThermal);
 fprintf('nSteps             : %d\n\n', params.nSteps);
 
 baseOut = run_projection_piston_wallvp_demo(runParams);
 
-plateauTable = build_plateau_table(baseOut.diagTable, levels, params.averageHoldFraction);
-fitTable = build_fit_table(plateauTable);
+plateauTable = build_plateau_table(baseOut.diagTable, levels, params.averageHoldFraction, params.fitMinSamples);
+fitTable = build_fit_table(plateauTable, logical(params.excludeInvalidPlateauxFromFit));
 
 out = baseOut;
 out.staircase = struct();
@@ -112,6 +114,11 @@ params = set_default(params, 'initialHoldSteps', 0);
 params = set_default(params, 'moveSteps', 50);
 params = set_default(params, 'holdSteps', 250);
 params = set_default(params, 'averageHoldFraction', 0.5);
+% Fit control: the raw step-0 state is not a thermodynamic plateau.
+% Keep it in the plateau table for traceability, but exclude it from EOS fits
+% unless an actual initial hold produced at least fitMinSamples finite samples.
+params = set_default(params, 'fitMinSamples', 2);
+params = set_default(params, 'excludeInvalidPlateauxFromFit', true);
 params = set_default(params, 'sampleEvery', 50);
 params = set_default(params, 'progressEvery', 100);
 params = set_default(params, 'visualEnable', false);
@@ -142,11 +149,16 @@ params = set_default(params, 'saveOutput', true);
 params = set_default(params, 'maxWallClockSeconds', Inf);
 end
 
-function plateauTable = build_plateau_table(T, levels, avgFrac)
+function plateauTable = build_plateau_table(T, levels, avgFrac, fitMinSamples)
 vars = {'rhoPhysicalMean','PkinMean','PvirMean','PtotMean','PdriveMean','PkinIdealRatio','PtotIdealRatio', ...
     'stdN','lowKDensity','kBTCell','virialDuRms','virialDuOverThermalRms', ...
     'virialLimitedCellFraction','virialLimitedCellCount','virialLimiterDuMax', ...
-    'virialResidualMomentumKickNorm','massFluxBefore','massFluxAfter','massFluxResidual'};
+    'virialResidualMomentumKickNorm', ...
+    'pressureTopWallImpact','pressureTopWallVP','pressureTopWallVPSigned', ...
+    'pressureTopWallVPPositiveCompression','pressureTopWallVPFlippedSign', ...
+    'pressureTopWallTotal','pressureTopWallTotalPositiveCompression','pressureTopWallTotalFlippedVP', ...
+    'pressureTopWallTotalFromWallInfo','pressureTopWallTotalConsistencyResidual', ...
+    'massFluxBefore','massFluxAfter','massFluxResidual'};
 rows = cell(numel(levels), 1);
 for j = 1:numel(levels)
     if ismember('pistonPhaseIndex', T.Properties.VariableNames)
@@ -190,12 +202,65 @@ for j = 1:numel(levels)
             row.(name) = NaN;
         end
     end
+
+    % Pairwise wall-pressure means: the top-wall impact, VP and reconstructed
+    % total must be averaged on the same valid samples.  This keeps plateau
+    % means algebraically consistent even when a raw initial sample or an older
+    % diagnostic lacks a VP contribution.
+    if all(ismember({'pressureTopWallImpact','pressureTopWallVPPositiveCompression'}, R.Properties.VariableNames))
+        topImpact = R.pressureTopWallImpact;
+        topVPPos = R.pressureTopWallVPPositiveCompression;
+        topMask = isfinite(topImpact) & isfinite(topVPPos);
+        if any(topMask)
+            row.pressureTopWallImpact = mean(topImpact(topMask), 'omitnan');
+            if ismember('pressureTopWallVP', R.Properties.VariableNames)
+                row.pressureTopWallVP = mean(R.pressureTopWallVP(topMask), 'omitnan');
+            end
+            if ismember('pressureTopWallVPSigned', R.Properties.VariableNames)
+                row.pressureTopWallVPSigned = mean(R.pressureTopWallVPSigned(topMask), 'omitnan');
+            end
+            row.pressureTopWallVPPositiveCompression = mean(topVPPos(topMask), 'omitnan');
+            if ismember('pressureTopWallVPFlippedSign', R.Properties.VariableNames)
+                row.pressureTopWallVPFlippedSign = mean(R.pressureTopWallVPFlippedSign(topMask), 'omitnan');
+                row.pressureTopWallTotalFlippedVP = mean(topImpact(topMask) + R.pressureTopWallVPFlippedSign(topMask), 'omitnan');
+            end
+            row.pressureTopWallTotal = mean(topImpact(topMask) + topVPPos(topMask), 'omitnan');
+            row.pressureTopWallTotalPositiveCompression = row.pressureTopWallTotal;
+            if ismember('pressureTopWallTotalFromWallInfo', R.Properties.VariableNames)
+                row.pressureTopWallTotalFromWallInfo = mean(R.pressureTopWallTotalFromWallInfo(topMask), 'omitnan');
+            end
+            row.pressureTopWallTotalConsistencyResidual = 0.0;
+        end
+    end
+
+    % A raw step-0 sample is useful to display, but it is not a relaxed EOS
+    % plateau.  It must not enter pressure-density fits.  If the user sets
+    % initialHoldSteps > 0, the zero-compression level becomes valid as soon
+    % as it has enough finite thermodynamic samples.
+    row.isInitialZeroLevel = (j == 1) && abs(levels(j)) <= 10*eps(1);
+    row.validForFit = row.nSamples >= max(1, fitMinSamples) ...
+        && row.stepMax > 0 ...
+        && isfinite(row.rhoPhysicalMean) ...
+        && isfinite(row.PkinMean) ...
+        && isfinite(row.PvirMean) ...
+        && isfinite(row.PtotMean) ...
+        && isfinite(row.PdriveMean);
+    if row.isInitialZeroLevel && row.nSamples < max(1, fitMinSamples)
+        row.fitComment = "initial/raw_not_relaxed";
+    elseif ~row.validForFit
+        row.fitComment = "excluded";
+    else
+        row.fitComment = "used";
+    end
     rows{j} = row;
 end
 plateauTable = vertcat(rows{:});
 end
 
-function fitTable = build_fit_table(P)
+function fitTable = build_fit_table(P, excludeInvalid)
+if nargin < 2 || isempty(excludeInvalid)
+    excludeInvalid = true;
+end
 quantities = {'PkinMean','PvirMean','PtotMean','PdriveMean'};
 rows = cell(numel(quantities), 1);
 for i = 1:numel(quantities)
@@ -203,6 +268,9 @@ for i = 1:numel(quantities)
     x = P.rhoPhysicalMean;
     y = P.(q);
     ok = isfinite(x) & isfinite(y);
+    if excludeInvalid && ismember('validForFit', P.Properties.VariableNames)
+        ok = ok & logical(P.validForFit);
+    end
     row = table();
     row.quantity = string(q);
     row.n = nnz(ok);

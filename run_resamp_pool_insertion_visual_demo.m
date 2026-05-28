@@ -32,13 +32,17 @@ end
 nRows = floor(opts.steps / opts.summaryEvery) + 2;
 rows = repmat(empty_row(), nRows, 1);
 irow = 1;
+insertStats = empty_insert_stats();
+thermostatAfterRemapDiag = empty_thermostat_after_remap_diag();
+insertDiag0 = attach_insert_cumulative(empty_insert_diag(), insertStats);
+stepDiag0 = attach_thermostat_after_remap(empty_step_diag(), thermostatAfterRemapDiag);
 [md, tg] = diagnostics(state, params);
-rows(irow) = make_row(0, 0.0, md, tg, empty_step_diag(), empty_insert_diag(), empty_remap_diag());
+rows(irow) = make_row(0, 0.0, md, tg, stepDiag0, insertDiag0, empty_remap_diag());
 
 resamp_pool_visualize_frame(state, params, 0, ...
-    'insertDiag', empty_insert_diag(), ...
+    'insertDiag', insertDiag0, ...
     'remapDiag', empty_remap_diag(), ...
-    'stepDiag', empty_step_diag(), ...
+    'stepDiag', stepDiag0, ...
     'figureId', opts.figureId, ...
     'showDebugFigure', opts.showDebugFigure, ...
     'debugFigureId', opts.debugFigureId, ...
@@ -47,9 +51,10 @@ resamp_pool_visualize_frame(state, params, 0, ...
     'framePrefix', opts.framePrefix, ...
     'titleSuffix', opts.initialDepletion);
 
-lastStepDiag = empty_step_diag();
-lastInsertDiag = empty_insert_diag();
+lastStepDiag = stepDiag0;
+lastInsertDiag = insertDiag0;
 lastRemapDiag = empty_remap_diag();
+lastThermostatAfterRemapDiag = thermostatAfterRemapDiag;
 
 for step = 1:opts.steps
     switch opts.method
@@ -60,8 +65,6 @@ for step = 1:opts.steps
         otherwise
             error('Unknown method: %s', opts.method);
     end
-    lastStepDiag = stepDiag;
-
     if opts.insertEvery > 0 && mod(step, opts.insertEvery) == 0
         [state, insertDiag] = resamp_insert_underpopulated_particles(state, params, ...
             'NTarget', opts.NTarget, ...
@@ -75,6 +78,8 @@ for step = 1:opts.steps
     else
         insertDiag = empty_insert_diag();
     end
+    insertStats = update_insert_stats(insertStats, insertDiag, step);
+    insertDiag = attach_insert_cumulative(insertDiag, insertStats);
     lastInsertDiag = insertDiag;
 
     if opts.remapEvery > 0 && mod(step, opts.remapEvery) == 0
@@ -91,6 +96,19 @@ for step = 1:opts.steps
     end
     lastRemapDiag = remapDiag;
 
+    if opts.thermostatAfterRemap
+        [state.v, thermostatAfterRemapDiag] = resamp_apply_cell_thermostat_weighted(state.x, state.v, state.m, params, ...
+            'periodicX', true, 'periodicY', true, ...
+            'activeMask', resamp_active_mask(state), ...
+            'targetKBT', opts.thermostatTargetKBT, ...
+            'strength', opts.thermostatStrength);
+    else
+        thermostatAfterRemapDiag = empty_thermostat_after_remap_diag();
+    end
+    lastThermostatAfterRemapDiag = thermostatAfterRemapDiag;
+    stepDiag = attach_thermostat_after_remap(stepDiag, thermostatAfterRemapDiag);
+    lastStepDiag = stepDiag;
+
     doVisual = (opts.visualEvery > 0 && mod(step, opts.visualEvery) == 0) || step == opts.steps;
     doSummary = (opts.summaryEvery > 0 && mod(step, opts.summaryEvery) == 0) || step == opts.steps;
     if doSummary || doVisual
@@ -101,11 +119,15 @@ for step = 1:opts.steps
         irow = irow + 1;
         rows(irow) = make_row(step, step * params.dt, md, tg, stepDiag, insertDiag, remapDiag);
         fprintf(['visual resamp %-12s step=%6d t=%.4g Nact=%7d free=%7d ', ...
-                 'N[min,max]=[%3g,%3g] Mrel=%.3e inserted=%5d poor=%4d over=%4d ', ...
-                 'mRelStd=%.3e kBT=%.5g\n'], ...
+                 'N[min,max]=[%3g,%3g] Mrel=%.3e insertedNow=%s insertedCum=%s lastInsert=%s ', ...
+                 'poor=%4g over=%4g mRelStd=%.3e kBT=%.5g thermAfter=%.5g\n'], ...
             opts.method, step, step*params.dt, md.NpActive, md.Nfree, md.NMin, md.NMax, md.MRelRms, ...
-            get_field(insertDiag, 'nInsertedParticles', 0), get_field(insertDiag, 'nPoorCellsAfter', NaN), ...
-            get_field(insertDiag, 'nOverCellsAfter', NaN), md.mParticleRelStd, md.kBTWeighted);
+            format_scalar(get_field(insertDiag, 'nInsertedParticles', NaN)), ...
+            format_scalar(get_field(insertDiag, 'nInsertedParticlesCumulative', NaN)), ...
+            format_scalar(get_field(insertDiag, 'lastInsertionStep', NaN)), ...
+            get_field(insertDiag, 'nPoorCellsAfter', NaN), ...
+            get_field(insertDiag, 'nOverCellsAfter', NaN), md.mParticleRelStd, md.kBTWeighted, ...
+            get_nested(stepDiag, {'thermostatAfterRemap','meanKBTAfter'}, NaN));
     end
 
     if doVisual
@@ -139,6 +161,8 @@ out.finalPoolInfo = resamp_particle_pool_info(state);
 out.lastStepDiag = lastStepDiag;
 out.lastInsertDiag = lastInsertDiag;
 out.lastRemapDiag = lastRemapDiag;
+out.lastThermostatAfterRemapDiag = lastThermostatAfterRemapDiag;
+out.insertStats = insertStats;
 
 if opts.writeCsv
     csvPath = fullfile(opts.outputDir, sprintf('resamp_pool_insertion_visual_%s_%s.csv', opts.method, opts.initialDepletion));
@@ -177,7 +201,8 @@ params.projectionMomentumCorrectionEnable = true;
 params.projectionMomentumCorrectionMode = 'particle_global_exact';
 params.thermostatAfterStep = opts.thermostatAfterStep;
 params.thermostatAfterProjection = opts.thermostatAfterProjection;
-params.thermostatTargetKBT = opts.kBT;
+params.thermostatAfterRemap = opts.thermostatAfterRemap;
+params.thermostatTargetKBT = opts.thermostatTargetKBT;
 params.thermostatStrength = opts.thermostatStrength;
 params.thermostatMinParticlesPerCell = 2;
 params.thermostatMaxScale = 10;
@@ -213,6 +238,8 @@ opts.projectionStrength = 1.0;
 opts.projectionInterpolationMethod = 'nearest';
 opts.thermostatAfterStep = false;
 opts.thermostatAfterProjection = false;
+opts.thermostatAfterRemap = false;
+opts.thermostatTargetKBT = [];
 opts.thermostatStrength = 1.0;
 opts.rngSeed = 12345;
 opts.writeCsv = true;
@@ -288,6 +315,10 @@ for k = 1:2:numel(varargin)
             opts.thermostatAfterStep = logical(val);
         case 'thermostatafterprojection'
             opts.thermostatAfterProjection = logical(val);
+        case 'thermostatafterremap'
+            opts.thermostatAfterRemap = logical(val);
+        case 'thermostattargetkbt'
+            opts.thermostatTargetKBT = val;
         case 'thermostatstrength'
             opts.thermostatStrength = val;
         case 'rngseed'
@@ -364,6 +395,9 @@ if isempty(opts.memoryMinParticles)
 end
 if isempty(opts.insertKBT)
     opts.insertKBT = opts.kBT;
+end
+if isempty(opts.thermostatTargetKBT)
+    opts.thermostatTargetKBT = opts.kBT;
 end
 end
 
@@ -460,6 +494,15 @@ row.poorCellsAfterInsert = NaN;
 row.emptyCellsAfterInsert = NaN;
 row.overCellsAfterInsert = NaN;
 row.capacityHit = NaN;
+row.insertedParticlesCumulative = NaN;
+row.insertCellsCumulative = NaN;
+row.maxInsertedParticlesPerStep = NaN;
+row.lastInsertionStep = NaN;
+row.thermostatAfterRemapEnabled = NaN;
+row.thermostatAfterRemapMeanKBTBefore = NaN;
+row.thermostatAfterRemapMeanKBTAfter = NaN;
+row.thermostatAfterRemapMeanScale = NaN;
+row.thermostatAfterRemapRmsVelocityChange = NaN;
 row.remapMassResidualRelRms = NaN;
 row.remapMomentumResidualRms = NaN;
 row.remapSuccessFractionNonEmpty = NaN;
@@ -501,6 +544,15 @@ row.poorCellsAfterInsert = get_field(insertDiag, 'nPoorCellsAfter', NaN);
 row.emptyCellsAfterInsert = get_field(insertDiag, 'nEmptyCellsAfter', NaN);
 row.overCellsAfterInsert = get_field(insertDiag, 'nOverCellsAfter', NaN);
 row.capacityHit = double(get_field(insertDiag, 'capacityHit', NaN));
+row.insertedParticlesCumulative = get_field(insertDiag, 'nInsertedParticlesCumulative', NaN);
+row.insertCellsCumulative = get_field(insertDiag, 'nInsertedCellsCumulative', NaN);
+row.maxInsertedParticlesPerStep = get_field(insertDiag, 'maxInsertedParticlesPerStep', NaN);
+row.lastInsertionStep = get_field(insertDiag, 'lastInsertionStep', NaN);
+row.thermostatAfterRemapEnabled = double(get_nested(stepDiag, {'thermostatAfterRemap','enabled'}, false));
+row.thermostatAfterRemapMeanKBTBefore = get_nested(stepDiag, {'thermostatAfterRemap','meanKBTBefore'}, NaN);
+row.thermostatAfterRemapMeanKBTAfter = get_nested(stepDiag, {'thermostatAfterRemap','meanKBTAfter'}, NaN);
+row.thermostatAfterRemapMeanScale = get_nested(stepDiag, {'thermostatAfterRemap','meanScale'}, NaN);
+row.thermostatAfterRemapRmsVelocityChange = get_nested(stepDiag, {'thermostatAfterRemap','rmsVelocityChange'}, NaN);
 row.remapMassResidualRelRms = get_field(remapDiag, 'massResidualRelRms', NaN);
 row.remapMomentumResidualRms = get_field(remapDiag, 'momentumResidualRms', NaN);
 row.remapSuccessFractionNonEmpty = get_field(remapDiag, 'successFractionNonEmpty', NaN);
@@ -512,11 +564,67 @@ end
 
 function d = empty_insert_diag()
 d = struct('nInsertedParticles', NaN, 'nCellsInserted', NaN, 'nPoorCellsAfter', NaN, ...
-    'nEmptyCellsAfter', NaN, 'nOverCellsAfter', NaN, 'capacityHit', false, 'insertedPerCellGrid', []);
+    'nEmptyCellsAfter', NaN, 'nOverCellsAfter', NaN, 'capacityHit', false, 'insertedPerCellGrid', [], ...
+    'nInsertedParticlesCumulative', NaN, 'nInsertedCellsCumulative', NaN, ...
+    'maxInsertedParticlesPerStep', NaN, 'lastInsertionStep', NaN);
 end
 
 function d = empty_remap_diag()
 d = struct('massResidualRelRms', NaN, 'momentumResidualRms', NaN, 'successFractionNonEmpty', NaN);
+end
+
+
+function stats = empty_insert_stats()
+stats = struct();
+stats.nInsertedParticlesCumulative = 0;
+stats.nInsertedCellsCumulative = 0;
+stats.maxInsertedParticlesPerStep = 0;
+stats.lastInsertionStep = NaN;
+end
+
+function stats = update_insert_stats(stats, insertDiag, step)
+nNow = get_field(insertDiag, 'nInsertedParticles', 0);
+cNow = get_field(insertDiag, 'nCellsInserted', 0);
+if ~isfinite(nNow)
+    nNow = 0;
+end
+if ~isfinite(cNow)
+    cNow = 0;
+end
+stats.nInsertedParticlesCumulative = stats.nInsertedParticlesCumulative + nNow;
+stats.nInsertedCellsCumulative = stats.nInsertedCellsCumulative + cNow;
+stats.maxInsertedParticlesPerStep = max(stats.maxInsertedParticlesPerStep, nNow);
+if nNow > 0
+    stats.lastInsertionStep = step;
+end
+end
+
+function d = attach_insert_cumulative(d, stats)
+d.nInsertedParticlesCumulative = stats.nInsertedParticlesCumulative;
+d.nInsertedCellsCumulative = stats.nInsertedCellsCumulative;
+d.maxInsertedParticlesPerStep = stats.maxInsertedParticlesPerStep;
+d.lastInsertionStep = stats.lastInsertionStep;
+end
+
+function info = empty_thermostat_after_remap_diag()
+info = struct('enabled', false, 'targetKBT', NaN, 'strength', NaN, ...
+    'minParticlesPerCell', NaN, 'maxScale', NaN, 'nThermostattedCells', 0, ...
+    'meanScale', NaN, 'minScale', NaN, 'maxScaleApplied', NaN, ...
+    'meanKBTBefore', NaN, 'meanKBTAfter', NaN, 'rmsVelocityChange', 0.0);
+end
+
+function d = attach_thermostat_after_remap(d, thermostatInfo)
+d.thermostatAfterRemap = thermostatInfo;
+end
+
+function s = format_scalar(v)
+if isempty(v) || ~isfinite(v)
+    s = 'n/a';
+elseif abs(v - round(v)) < 10*eps(max(1, abs(v)))
+    s = sprintf('%d', round(v));
+else
+    s = sprintf('%.4g', v);
+end
 end
 
 function v = get_field(s, name, defaultValue)

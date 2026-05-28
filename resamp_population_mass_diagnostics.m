@@ -1,8 +1,5 @@
 function diag = resamp_population_mass_diagnostics(state, params, varargin)
-%RESAMP_POPULATION_MASS_DIAGNOSTICS Diagnostics for weighted particles.
-%
-% Separates particle count N, cell mass M, individual particle mass m_p,
-% weighted global momentum and weighted kinetic/thermal measures.
+%RESAMP_POPULATION_MASS_DIAGNOSTICS Diagnostics for weighted active particles.
 
 validate_state(state);
 periodicX = true;
@@ -20,19 +17,32 @@ for k = 1:2:numel(varargin)
     end
 end
 
+activeMask = resamp_active_mask(state);
 G = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', eps);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', eps, 'activeMask', activeMask);
 N = double(G.N(:));
 M = double(G.M(:));
-m = state.m(:);
-v = state.v;
+m = state.m(activeMask);
+v = state.v(activeMask, :);
+
+if isempty(m)
+    m = zeros(0,1);
+    v = zeros(0,2);
+end
 
 gamma = get_param(params, 'gamma', mean(N, 'omitnan'));
-nominalParticleMass = get_param(params, 'resampParticleMass', get_param(params, 'particleMass', median(m, 'omitnan')));
+nominalParticleMass = get_param(params, 'resampParticleMass', get_param(params, 'particleMass', 1.0));
+if isempty(nominalParticleMass) || ~isfinite(nominalParticleMass)
+    nominalParticleMass = 1.0;
+end
 nominalCellMass = get_param(params, 'resampTargetCellMass', gamma * nominalParticleMass);
 
 Mtot = sum(m, 'omitnan');
-Ptot = [sum(m .* v(:,1), 'omitnan'), sum(m .* v(:,2), 'omitnan')];
+if ~isempty(m)
+    Ptot = [sum(m .* v(:,1), 'omitnan'), sum(m .* v(:,2), 'omitnan')];
+else
+    Ptot = [0 0];
+end
 if Mtot > 0
     Uglobal = Ptot ./ Mtot;
     c = v - Uglobal;
@@ -45,8 +55,14 @@ else
 end
 
 massErr = M - nominalCellMass;
+pool = resamp_particle_pool_info(state);
+
 diag = struct();
-diag.Np = size(state.x,1);
+diag.Np = pool.Nactive;
+diag.NpActive = pool.Nactive;
+diag.Ncapacity = pool.Ncapacity;
+diag.Nfree = pool.Nfree;
+diag.activeFraction = pool.activeFraction;
 diag.Nx = params.Nx;
 diag.Ny = params.Ny;
 diag.NCells = params.Nx * params.Ny;
@@ -72,11 +88,20 @@ diag.MMax = max(M);
 diag.MRelRms = sqrt(mean((massErr ./ max(nominalCellMass, eps)).^2, 'omitnan'));
 diag.MOutBandFraction = mean(abs(M - nominalCellMass) > 0.2 * max(nominalCellMass, eps), 'omitnan');
 
-diag.mParticleMean = mean(m, 'omitnan');
-diag.mParticleStd = std(m, 0, 'omitnan');
-diag.mParticleMin = min(m);
-diag.mParticleMax = max(m);
-diag.mParticleRelStd = diag.mParticleStd / max(diag.mParticleMean, eps);
+if isempty(m)
+    diag.mParticleMean = NaN;
+    diag.mParticleStd = NaN;
+    diag.mParticleMin = NaN;
+    diag.mParticleMax = NaN;
+    diag.mParticleRelStd = NaN;
+else
+    diag.mParticleMean = mean(m, 'omitnan');
+    diag.mParticleStd = std(m, 0, 'omitnan');
+    diag.mParticleMin = min(m);
+    diag.mParticleMax = max(m);
+    diag.mParticleRelStd = diag.mParticleStd / max(diag.mParticleMean, eps);
+end
+
 diag.nominalParticleMass = nominalParticleMass;
 diag.nominalCellMass = nominalCellMass;
 diag.G = G;
@@ -90,7 +115,7 @@ if size(state.x,2) ~= 2 || size(state.v,2) ~= 2 || size(state.x,1) ~= size(state
     error('state.x and state.v must be Np-by-2 arrays with matching particle count.');
 end
 if numel(state.m) ~= size(state.x,1)
-    error('state.m must have one entry per particle.');
+    error('state.m must have one entry per particle slot.');
 end
 if any(~isfinite(state.m(:))) || any(state.m(:) < 0)
     error('state.m must contain finite non-negative masses.');

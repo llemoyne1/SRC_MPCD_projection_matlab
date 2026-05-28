@@ -1,42 +1,20 @@
 function [stateOut, diag] = resamp_local_mass_moment_remap(state, params, varargin)
 %RESAMP_LOCAL_MASS_MOMENT_REMAP Local conservative mass/moment remap.
 %
-%   [stateOut, diag] = resamp_local_mass_moment_remap(state, params)
-%
-% This is the second weighted-resampling building block.  It changes only
-% particle masses; positions and velocities are left unchanged.  It does
-% not create, delete, split or merge particles.
-%
-% By default the target velocity in each cell is the current weighted cell
-% velocity.  Therefore the local target momentum is
-%
-%       Ptarget_c = Mtarget_c * Uold_c,
-%
-% which means the remap imposes the target cell mass while preserving the
-% hydrodynamic cell velocity.  This is deliberately conservative: no force
-% or velocity kick is introduced by the remap itself.
-%
-% Options:
-%   'targetCellMass'       scalar or Nx-by-Ny grid, default gamma*m0
-%   'targetVelocityMode'   'preserve_cell_velocity' or 'grid'
-%   'targetUx','targetUy'  Nx-by-Ny grids, required for targetVelocityMode='grid'
-%   'method'               'scale_preserve_velocity' or 'min_change'
-%   'massMin'              scalar lower mass bound, default 0
-%   'massMax'              scalar upper mass bound, default Inf
-%   'periodicX'            default true
-%   'periodicY'            default true
-%   'minMass'              default eps
-%   'constraintTolerance'  default 1e-10
-%   'computeDiagnostics'   default true
+% Supports preallocated pool states.  Only active particles are remapped;
+% inactive storage slots are ignored and left unchanged.
 
 validate_state(state);
 
 Nx = get_param(params, 'Nx', []);
 Ny = get_param(params, 'Ny', []);
 gamma = get_param(params, 'gamma', []);
-nominalParticleMass = get_param(params, 'resampParticleMass', get_param(params, 'particleMass', median(state.m(:), 'omitnan')));
+nominalParticleMass = get_param(params, 'resampParticleMass', get_param(params, 'particleMass', median(state.m(resamp_active_mask(state)), 'omitnan')));
 if isempty(Nx) || isempty(Ny) || isempty(gamma)
     error('params must contain Nx, Ny and gamma.');
+end
+if isempty(nominalParticleMass) || ~isfinite(nominalParticleMass) || nominalParticleMass <= 0
+    nominalParticleMass = 1.0;
 end
 
 targetCellMass = get_param(params, 'resampTargetCellMass', gamma * nominalParticleMass);
@@ -108,8 +86,9 @@ else
     targetUyVec = [];
 end
 
+activeMask = resamp_active_mask(state);
 Gbefore = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeMask);
 cellId = Gbefore.cellId;
 Nvec = reshape(Gbefore.N.', [Nc, 1]);
 Mvec = reshape(Gbefore.M.', [Nc, 1]);
@@ -129,7 +108,7 @@ solverResidualRel = NaN(Nc, 1);
 deltaMassRmsRelCell = NaN(Nc, 1);
 
 for c = 1:Nc
-    ids = find(cellId == c);
+    ids = find(activeMask & cellId == c);
     if isempty(ids)
         cellSkippedEmpty(c) = true;
         massResidual(c) = -targetMassVec(c);
@@ -193,8 +172,10 @@ end
 
 stateOut = state;
 stateOut.m = mNewAll;
+stateOut.Nactive = nnz(activeMask);
+stateOut.Ncapacity = size(stateOut.x,1);
 Gafter = resamp_deposit_weighted_to_grid(stateOut.x, stateOut.v, stateOut.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeMask);
 
 Mafter = reshape(Gafter.M.', [Nc, 1]);
 PxAfter = reshape(Gafter.Px.', [Nc, 1]);
@@ -213,6 +194,7 @@ finalMomentumResidualX = PxAfter - Pxtarget;
 finalMomentumResidualY = PyAfter - Pytarget;
 
 mdAfter = resamp_population_mass_diagnostics(stateOut, params, 'periodicX', periodicX, 'periodicY', periodicY);
+activeAfter = resamp_active_mask(stateOut);
 
 diag = struct();
 diag.kind = 'local_mass_moment_remap';
@@ -235,18 +217,21 @@ diag.massResidualRelRms = sqrt(mean((finalMassResidual ./ max(abs(targetMassVec)
 diag.momentumResidualRms = sqrt(mean(finalMomentumResidualX.^2 + finalMomentumResidualY.^2, 'omitnan'));
 diag.momentumResidualMaxNorm = max(hypot(finalMomentumResidualX, finalMomentumResidualY));
 diag.solverResidualRelMax = max(solverResidualRel, [], 'omitnan');
-diag.deltaMassMean = mean(mNewAll - mOldAll, 'omitnan');
-diag.deltaMassRms = sqrt(mean((mNewAll - mOldAll).^2, 'omitnan'));
-diag.deltaMassRelRms = sqrt(mean(((mNewAll - mOldAll) ./ max(mean(mOldAll), eps)).^2, 'omitnan'));
+diag.deltaMassMean = mean(mNewAll(activeAfter) - mOldAll(activeAfter), 'omitnan');
+diag.deltaMassRms = sqrt(mean((mNewAll(activeAfter) - mOldAll(activeAfter)).^2, 'omitnan'));
+diag.deltaMassRelRms = sqrt(mean(((mNewAll(activeAfter) - mOldAll(activeAfter)) ./ max(mean(mOldAll(activeAfter)), eps)).^2, 'omitnan'));
 diag.deltaMassRelCellRmsMean = mean(deltaMassRmsRelCell, 'omitnan');
-diag.mParticleMinAfter = min(mNewAll);
-diag.mParticleMaxAfter = max(mNewAll);
-diag.mParticleStdAfter = std(mNewAll, 0, 'omitnan');
-diag.totalMassBefore = sum(mOldAll, 'omitnan');
-diag.totalMassAfter = sum(mNewAll, 'omitnan');
+diag.mParticleMinAfter = min(mNewAll(activeAfter));
+diag.mParticleMaxAfter = max(mNewAll(activeAfter));
+diag.mParticleStdAfter = std(mNewAll(activeAfter), 0, 'omitnan');
+diag.totalMassBefore = sum(mOldAll(activeMask), 'omitnan');
+diag.totalMassAfter = sum(mNewAll(activeAfter), 'omitnan');
 diag.totalMassTarget = sum(targetMassVec, 'omitnan');
-diag.totalMomentumBefore = [sum(mOldAll .* state.v(:,1), 'omitnan'), sum(mOldAll .* state.v(:,2), 'omitnan')];
-diag.totalMomentumAfter = [sum(mNewAll .* state.v(:,1), 'omitnan'), sum(mNewAll .* state.v(:,2), 'omitnan')];
+diag.totalMomentumBefore = [sum(mOldAll(activeMask) .* state.v(activeMask,1), 'omitnan'), sum(mOldAll(activeMask) .* state.v(activeMask,2), 'omitnan')];
+diag.totalMomentumAfter = [sum(mNewAll(activeAfter) .* state.v(activeAfter,1), 'omitnan'), sum(mNewAll(activeAfter) .* state.v(activeAfter,2), 'omitnan')];
+diag.NpActive = nnz(activeAfter);
+diag.Ncapacity = size(stateOut.x,1);
+diag.Nfree = diag.Ncapacity - diag.NpActive;
 diag.massDiagnosticsAfter = mdAfter;
 diag.cellSuccess = [];
 diag.cellSkippedEmpty = [];
@@ -295,7 +280,7 @@ if size(state.x,2) ~= 2 || size(state.v,2) ~= 2 || size(state.x,1) ~= size(state
     error('state.x and state.v must be Np-by-2 arrays with matching particle count.');
 end
 if numel(state.m) ~= size(state.x,1)
-    error('state.m must have one entry per particle.');
+    error('state.m must have one entry per particle slot.');
 end
 if any(~isfinite(state.m(:))) || any(state.m(:) < 0)
     error('state.m must contain finite non-negative masses.');

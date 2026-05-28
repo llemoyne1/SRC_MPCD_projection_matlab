@@ -1,10 +1,5 @@
 function [vOut, info] = resamp_apply_cell_thermostat_weighted(x, v, m, params, varargin)
 %RESAMP_APPLY_CELL_THERMOSTAT_WEIGHTED Momentum-preserving weighted thermostat.
-%
-% Per cell, rescales fluctuations around the weighted mean velocity:
-%      v_i <- U_cell + s_cell (v_i - U_cell)
-% with U_cell = sum(m_i v_i)/sum(m_i).  This preserves weighted cell
-% momentum exactly up to roundoff.
 
 if nargin < 4
     error('Usage: [vOut, info] = resamp_apply_cell_thermostat_weighted(x, v, m, params, ...)');
@@ -16,6 +11,7 @@ strength = get_param(params, 'thermostatStrength', 1.0);
 minParticles = get_param(params, 'thermostatMinParticlesPerCell', 2);
 maxScale = get_param(params, 'thermostatMaxScale', 10.0);
 minKBT = get_param(params, 'thermostatMinKBT', 1e-14);
+activeMask = true(size(v,1), 1);
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
     val = varargin{k+1};
@@ -32,29 +28,35 @@ for k = 1:2:numel(varargin)
             minParticles = val;
         case "maxscale"
             maxScale = val;
+        case {"activemask", "active"}
+            activeMask = logical(val(:));
         otherwise
             error('Unknown option: %s', string(key));
     end
 end
 
 m = m(:);
-if targetKBT <= 0 || strength <= 0 || isempty(v)
-    vOut = v;
+if numel(m) ~= size(v,1) || numel(activeMask) ~= size(v,1)
+    error('m and activeMask must have one entry per particle slot.');
+end
+activeMask = activeMask & isfinite(m) & m >= 0 & all(isfinite(x),2) & all(isfinite(v),2);
+vOut = v;
+if targetKBT <= 0 || strength <= 0 || ~any(activeMask)
     info = empty_info();
     return;
 end
-if numel(m) ~= size(v,1)
-    error('m must have one entry per particle.');
-end
 
-ids = resamp_cell_ids_periodic(x, params, 'periodicX', periodicX, 'periodicY', periodicY);
+xA = x(activeMask,:);
+vA = v(activeMask,:);
+mA = m(activeMask);
+ids = resamp_cell_ids_periodic(xA, params, 'periodicX', periodicX, 'periodicY', periodicY);
 Nc = params.Nx * params.Ny;
-Np = size(v, 1);
+NpA = size(vA, 1);
 
 nCell = accumarray(ids, 1, [Nc 1], @sum, 0);
-M = accumarray(ids, m, [Nc 1], @sum, 0);
-Px = accumarray(ids, m .* v(:,1), [Nc 1], @sum, 0);
-Py = accumarray(ids, m .* v(:,2), [Nc 1], @sum, 0);
+M = accumarray(ids, mA, [Nc 1], @sum, 0);
+Px = accumarray(ids, mA .* vA(:,1), [Nc 1], @sum, 0);
+Py = accumarray(ids, mA .* vA(:,2), [Nc 1], @sum, 0);
 
 Ux = zeros(Nc,1);
 Uy = zeros(Nc,1);
@@ -64,11 +66,11 @@ Uy(populated) = Py(populated) ./ M(populated);
 
 UxP = Ux(ids);
 UyP = Uy(ids);
-relx = v(:,1) - UxP;
-rely = v(:,2) - UyP;
+relx = vA(:,1) - UxP;
+rely = vA(:,2) - UyP;
 rel2 = relx.^2 + rely.^2;
 
-sumMRel2 = accumarray(ids, m .* rel2, [Nc 1], @sum, 0);
+sumMRel2 = accumarray(ids, mA .* rel2, [Nc 1], @sum, 0);
 kBTBefore = nan(Nc,1);
 kBTBefore(populated) = 0.5 * sumMRel2(populated) ./ M(populated);
 
@@ -85,11 +87,12 @@ end
 
 sP = scaleApply(ids);
 validP = valid(ids);
-vOut = v;
+vAOut = vA;
 if any(validP)
-    vOut(validP,1) = UxP(validP) + sP(validP) .* relx(validP);
-    vOut(validP,2) = UyP(validP) + sP(validP) .* rely(validP);
+    vAOut(validP,1) = UxP(validP) + sP(validP) .* relx(validP);
+    vAOut(validP,2) = UyP(validP) + sP(validP) .* rely(validP);
 end
+vOut(activeMask,:) = vAOut;
 
 kBTAfter = nan(Nc,1);
 kBTAfter(valid) = (scales(valid).^2) .* kBTBefore(valid);
@@ -106,8 +109,8 @@ info.minScale = min(scales, [], 'omitnan');
 info.maxScaleApplied = max(scales, [], 'omitnan');
 info.meanKBTBefore = mean(kBTBefore(valid), 'omitnan');
 info.meanKBTAfter = mean(kBTAfter(valid), 'omitnan');
-if Np > 0
-    info.rmsVelocityChange = sqrt(mean(sum((vOut - v).^2, 2), 'omitnan'));
+if NpA > 0
+    info.rmsVelocityChange = sqrt(mean(sum((vAOut - vA).^2, 2), 'omitnan'));
 else
     info.rmsVelocityChange = 0.0;
 end

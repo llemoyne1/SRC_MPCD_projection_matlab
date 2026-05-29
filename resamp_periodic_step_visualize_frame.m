@@ -36,7 +36,7 @@ omega = periodic_vorticity(G.Ux, G.Uy, dx, dy);
 [classMap, classLabels] = population_class_map(G.N, Nmin, Nmax, opts.insertDiag);
 [ifaceX, ifaceY] = step_interface_polyline(params);
 
-fig = figure(opts.figureId); %#ok<NASGU>
+fig = figure;%(opts.figureId); %#ok<NASGU>
 clf;
 set(gcf, 'Name', opts.figureName, 'Color', 'w');
 method = getf(params, 'method', 'resamp');

@@ -401,7 +401,7 @@ for k = 1:2:numel(varargin)
         case 'constrainttolerance'
             opts.constraintTolerance = val;
         case 'figureid'
-            opts.figureId = val;
+            opts.figureId = k;%val;
         case {'saveframes','saveframe'}
             opts.saveFrames = logical(val);
         case 'framedir'

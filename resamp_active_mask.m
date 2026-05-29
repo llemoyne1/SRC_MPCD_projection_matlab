@@ -1,10 +1,13 @@
 function activeMask = resamp_active_mask(state)
-%RESAMP_ACTIVE_MASK Return the active-particle mask for weighted resampling states.
+%RESAMP_ACTIVE_MASK Return the fluid-active particle mask for weighted resampling.
 %
-% Historical weighted states only contain x/v/m and are interpreted as fully
-% active.  Pool states add state.active, state.Nactive and state.Ncapacity;
-% inactive slots are storage only and must not enter deposits, collisions,
-% projection, thermostat or diagnostics.
+% Historical states only contain x/v/m and are interpreted as fully fluid
+% active.  Pool states add state.active.  Latent-aware states may also add
+% state.particleRole with roles:
+%   0 inactive/free pool, 1 fluid, 2 latent/non-fluid marker.
+%
+% Only role==1 particles enter deposits, collisions, projection, thermostat
+% and mass remapping.  Latent particles are stored but hydrodynamically inert.
 
 if ~isstruct(state) || ~isfield(state, 'x') || ~isfield(state, 'v') || ~isfield(state, 'm')
     error('state must contain x, v and m.');
@@ -21,6 +24,14 @@ if isfield(state, 'active') && ~isempty(state.active)
     end
 else
     activeMask = true(Np, 1);
+end
+
+if isfield(state, 'particleRole') && ~isempty(state.particleRole)
+    role = double(state.particleRole(:));
+    if numel(role) ~= Np
+        error('state.particleRole must have one entry per particle slot.');
+    end
+    activeMask = activeMask & round(role) == 1;
 end
 
 finiteState = all(isfinite(state.x), 2) & all(isfinite(state.v), 2) & isfinite(state.m(:));

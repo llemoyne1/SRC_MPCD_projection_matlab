@@ -162,6 +162,9 @@ for jj = 1:numel(poorCells)
     stateOut.v(ids,2) = U(2) + fluct(:,2);
     stateOut.m(ids) = m0;
     stateOut.active(ids) = true;
+    if isfield(stateOut, 'particleRole') && ~isempty(stateOut.particleRole)
+        stateOut.particleRole(ids) = 1;
+    end
     insertedPerCell(c) = nAdd;
 
     if capacityHit

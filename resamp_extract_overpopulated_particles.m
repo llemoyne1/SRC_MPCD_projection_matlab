@@ -113,6 +113,9 @@ for jj = 1:numel(overCells)
         continue;
     end
     stateOut.active(chosen) = false;
+    if isfield(stateOut, 'particleRole') && ~isempty(stateOut.particleRole)
+        stateOut.particleRole(chosen) = 0;
+    end
     stateOut.m(chosen) = 0;
     stateOut.v(chosen,:) = 0;
     stateOut.x(chosen,:) = 0;

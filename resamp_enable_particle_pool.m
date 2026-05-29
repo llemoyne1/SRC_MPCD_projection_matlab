@@ -49,11 +49,13 @@ stateOut.x = zeros(Ncapacity, 2);
 stateOut.v = zeros(Ncapacity, 2);
 stateOut.m = zeros(Ncapacity, 1);
 stateOut.active = false(Ncapacity, 1);
+stateOut.particleRole = zeros(Ncapacity, 1);
 if Nactive > 0
     stateOut.x(1:Nactive,:) = xActive;
     stateOut.v(1:Nactive,:) = vActive;
     stateOut.m(1:Nactive) = mActive(:);
     stateOut.active(1:Nactive) = true;
+    stateOut.particleRole(1:Nactive) = 1;
 end
 stateOut.Nactive = Nactive;
 stateOut.Ncapacity = Ncapacity;

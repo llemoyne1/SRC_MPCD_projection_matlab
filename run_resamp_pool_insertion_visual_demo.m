@@ -29,6 +29,12 @@ state = initialize_velocity_memory(state, params);
     'wetParticleOnThreshold', opts.wetParticleOnThreshold, ...
     'wetParticleOffThreshold', opts.wetParticleOffThreshold);
 params.cellWetMask = state.cellWetMask;
+if strcmp(opts.dryCellParticleMode, 'latent')
+    [state, initialDryParticleLatentInfo] = resamp_set_dry_cell_particles_latent(state, params, ...
+        'cellWetMask', state.cellWetMask);
+else
+    initialDryParticleLatentInfo = struct('nConvertedToLatent', 0);
+end
 
 if ~exist(opts.outputDir, 'dir')
     mkdir(opts.outputDir);
@@ -78,8 +84,15 @@ for step = 1:opts.steps
             'wetParticleOnThreshold', opts.wetParticleOnThreshold, ...
             'wetParticleOffThreshold', opts.wetParticleOffThreshold);
         params.cellWetMask = state.cellWetMask;
+        if strcmp(opts.dryCellParticleMode, 'latent')
+            [state, dryParticleLatentInfo] = resamp_set_dry_cell_particles_latent(state, params, ...
+                'cellWetMask', state.cellWetMask);
+        else
+            dryParticleLatentInfo = struct('nConvertedToLatent', 0);
+        end
     else
         wetMaskInfo = empty_wet_mask_update_diag();
+        dryParticleLatentInfo = struct('nConvertedToLatent', 0);
     end
 
     switch opts.method
@@ -224,6 +237,7 @@ out.initialInfo = initInfo;
 out.initialPopulationEditInfo = initialPopulationEditInfo;
 out.initialPoolInfo = poolInfo0;
 out.initialWetMaskInfo = initialWetMaskInfo;
+out.initialDryParticleLatentInfo = initialDryParticleLatentInfo;
 out.finalWetMask = state.cellWetMask;
 [~, out.finalWetMaskInfo] = resamp_cell_wet_mask(state, params, 'mode', 'auto');
 out.state = state;
@@ -343,6 +357,7 @@ opts.wetMassOnThreshold = [];
 opts.wetMassOffThreshold = [];
 opts.wetParticleOnThreshold = [];
 opts.wetParticleOffThreshold = [];
+opts.dryCellParticleMode = 'latent';
 opts.extractEvery = 0;
 opts.extractSelectionMode = 'closest_to_cell_mean';
 opts.preservePreEditVelocity = true;
@@ -462,6 +477,8 @@ for k = 1:2:numel(varargin)
             opts.wetParticleOnThreshold = val;
         case {'wetparticleoffthreshold','particleoffthreshold'}
             opts.wetParticleOffThreshold = val;
+        case {'drycellparticlemode','dryparticlemode'}
+            opts.dryCellParticleMode = lower(char(string(val)));
         case 'extractevery'
             opts.extractEvery = val;
         case {'extractselectionmode','selectionmode'}

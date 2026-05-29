@@ -25,30 +25,68 @@ fprintf('Wrote %s\n', fullfile(opts.outputRoot,'resamp_poiseuille_wallvp_summary
 end
 
 function caseDefs = build_cases(opts)
-caseDefs = struct([]);
-caseDefs(1).label = 'classic_wallvp_reference';
-caseDefs(1).method = 'weighted_classic';
-caseDefs(1).projectionStrength = 0;
-caseDefs(1).extractEvery = 0;
-caseDefs(1).insertEvery = 0;
-caseDefs(1).remapEvery = 0;
-caseDefs(1).thermostatAfterStep = true;
-caseDefs(1).thermostatAfterRemap = false;
-caseDefs(1).massSafetyEnable = false;
-caseDefs(1).NMin = 0;
-caseDefs(1).NMax = 2 * opts.NTarget;
+allCases = struct([]);
+allCases(1).label = 'classic_wallvp_reference';
+allCases(1).method = 'weighted_classic';
+allCases(1).projectionStrength = 0;
+allCases(1).extractEvery = 0;
+allCases(1).insertEvery = 0;
+allCases(1).remapEvery = 0;
+allCases(1).thermostatAfterStep = true;
+allCases(1).thermostatAfterRemap = false;
+allCases(1).massSafetyEnable = false;
+allCases(1).NMin = 0;
+allCases(1).NMax = 2 * opts.NTarget;
 
-caseDefs(2).label = 'q6_resampled_wallvp';
-caseDefs(2).method = 'weighted_q6';
-caseDefs(2).projectionStrength = 1;
-caseDefs(2).extractEvery = 1;
-caseDefs(2).insertEvery = 1;
-caseDefs(2).remapEvery = 1;
-caseDefs(2).thermostatAfterStep = false;
-caseDefs(2).thermostatAfterRemap = true;
-caseDefs(2).massSafetyEnable = true;
-caseDefs(2).NMin = opts.NMin;
-caseDefs(2).NMax = opts.NMax;
+allCases(2).label = 'q6_resampled_wallvp';
+allCases(2).method = 'weighted_q6';
+allCases(2).projectionStrength = 1;
+allCases(2).extractEvery = 1;
+allCases(2).insertEvery = 1;
+allCases(2).remapEvery = 1;
+allCases(2).thermostatAfterStep = false;
+allCases(2).thermostatAfterRemap = true;
+allCases(2).massSafetyEnable = true;
+allCases(2).NMin = opts.NMin;
+allCases(2).NMax = opts.NMax;
+
+wanted = normalize_case_list(opts.cases);
+caseDefs = struct([]);
+n = 0;
+for i = 1:numel(allCases)
+    if any(strcmp(allCases(i).label, wanted))
+        n = n + 1;
+        caseDefs(n) = allCases(i); %#ok<AGROW>
+    end
+end
+if isempty(caseDefs)
+    error('No Poiseuille wallVP cases selected. Valid cases are: classic_wallvp_reference, q6_resampled_wallvp.');
+end
+end
+
+function wanted = normalize_case_list(cases)
+if ischar(cases) || isstring(cases)
+    cases = cellstr(string(cases));
+end
+if isempty(cases)
+    cases = {'classic_wallvp_reference','q6_resampled_wallvp'};
+end
+wanted = cell(size(cases));
+for i = 1:numel(cases)
+    key = lower(strtrim(char(string(cases{i}))));
+    switch key
+        case {'classic_wallvp_reference','src_classic_wallvp_only','classic','weighted_classic'}
+            wanted{i} = 'classic_wallvp_reference';
+        case {'q6_resampled_wallvp','q6','weighted_q6','resampled'}
+            wanted{i} = 'q6_resampled_wallvp';
+        case {'all','both'}
+            wanted = {'classic_wallvp_reference','q6_resampled_wallvp'};
+            return;
+        otherwise
+            error('Unknown Poiseuille wallVP case: %s', key);
+    end
+end
+wanted = unique(wanted, 'stable');
 end
 
 function outCase = run_one_case(c, opts, ic)
@@ -303,12 +341,13 @@ if isstruct(s) && isfield(s,name) && ~isempty(s.(name)), v=s.(name); else, v=def
 end
 
 function opts = parse_options(varargin)
-opts=struct(); opts.outputRoot=fullfile('runs','resamp_poiseuille_wallvp_validation'); opts.Nx=64; opts.Ny=32; opts.gamma=20; opts.NTarget=20; opts.NMin=14; opts.NMax=26; opts.steps=5000; opts.sampleEvery=50; opts.summaryEvery=100; opts.dt=0.005; opts.alphaDeg=90; opts.kBT=0.01; opts.particleMass=1.0; opts.bodyForceX=0.005; opts.wallModeY='bounceback'; opts.capacityFactor=2.0; opts.thermostatStrength=0.25; opts.projectionInterpolationMethod='nearest'; opts.extractSelectionMode='closest_to_cell_mean'; opts.insertVelocityMode='current_or_memory_pairwise'; opts.memoryMinParticles=14; opts.remapMethod='scale_preserve_velocity'; opts.massMinFactor=0.05; opts.massMaxFactor=20.0; opts.remapMassSafetyMode='uniform_mass_velocity_shift'; opts.massSafetyMinFactor=0.25; opts.massSafetyMaxFactor=4.0; opts.constraintTolerance=1e-10; opts.preservePreEditVelocity=true; opts.alwaysUsePreEditVelocityForRemap=false; opts.initialPoiseuilleProfileEnable=false; opts.initialPoiseuilleNuGuess=0.05; opts.initialPoiseuilleScale=1.0; opts.excludeWallCells=2; opts.fitStartFraction=0.5; opts.poiseuilleFitModel='slip'; opts.rngSeed=12345; opts.visualEvery=0; opts.figureId=720; opts.profileFigureId=721; opts.showProfileFigure=true; opts.saveFrames=false; opts.saveFrameEvery=100; opts.saveFinalFigures=true; opts.frameDirName='frames'; opts.particleMarkerSize=3; opts.pngResolution=150; opts.wallVirtualParticlesEnable=true; opts.wallVirtualParticlesGeometryMode='shifted_solid_fraction'; opts.wallVirtualParticlesForceRandomShiftY=true; opts.wallVirtualParticlesDensityFactor=1.0; opts.wallVirtualParticlesPerCell=[]; opts.wallVirtualParticleMass=1.0; opts.wallVirtualParticlesThermal=true; opts.wallVirtualParticlesKBT=0.01; opts.wallVirtualParticlesStochasticCount=true;
+opts=struct(); opts.outputRoot=fullfile('runs','resamp_poiseuille_wallvp_validation'); opts.cases={'classic_wallvp_reference','q6_resampled_wallvp'}; opts.Nx=64; opts.Ny=32; opts.gamma=20; opts.NTarget=20; opts.NMin=14; opts.NMax=26; opts.steps=5000; opts.sampleEvery=50; opts.summaryEvery=100; opts.dt=0.005; opts.alphaDeg=90; opts.kBT=0.01; opts.particleMass=1.0; opts.bodyForceX=0.005; opts.wallModeY='bounceback'; opts.capacityFactor=2.0; opts.thermostatStrength=0.25; opts.projectionInterpolationMethod='nearest'; opts.extractSelectionMode='closest_to_cell_mean'; opts.insertVelocityMode='current_or_memory_pairwise'; opts.memoryMinParticles=14; opts.remapMethod='scale_preserve_velocity'; opts.massMinFactor=0.05; opts.massMaxFactor=20.0; opts.remapMassSafetyMode='uniform_mass_velocity_shift'; opts.massSafetyMinFactor=0.25; opts.massSafetyMaxFactor=4.0; opts.constraintTolerance=1e-10; opts.preservePreEditVelocity=true; opts.alwaysUsePreEditVelocityForRemap=false; opts.initialPoiseuilleProfileEnable=false; opts.initialPoiseuilleNuGuess=0.05; opts.initialPoiseuilleScale=1.0; opts.excludeWallCells=2; opts.fitStartFraction=0.5; opts.poiseuilleFitModel='slip'; opts.rngSeed=12345; opts.visualEvery=0; opts.figureId=720; opts.profileFigureId=721; opts.showProfileFigure=true; opts.saveFrames=false; opts.saveFrameEvery=100; opts.saveFinalFigures=true; opts.frameDirName='frames'; opts.particleMarkerSize=3; opts.pngResolution=150; opts.wallVirtualParticlesEnable=true; opts.wallVirtualParticlesGeometryMode='shifted_solid_fraction'; opts.wallVirtualParticlesForceRandomShiftY=true; opts.wallVirtualParticlesDensityFactor=1.0; opts.wallVirtualParticlesPerCell=[]; opts.wallVirtualParticleMass=1.0; opts.wallVirtualParticlesThermal=true; opts.wallVirtualParticlesKBT=0.01; opts.wallVirtualParticlesStochasticCount=true;
 if mod(numel(varargin),2)~=0, error('Options must be name/value pairs.'); end
 for k=1:2:numel(varargin)
     key=lower(char(string(varargin{k}))); val=varargin{k+1};
     switch key
         case 'outputroot', opts.outputRoot=char(string(val));
+        case 'cases', opts.cases=val;
         case 'nx', opts.Nx=val; case 'ny', opts.Ny=val; case 'gamma', opts.gamma=val; opts.NTarget=val; case 'ntarget', opts.NTarget=val; case 'nmin', opts.NMin=val; case 'nmax', opts.NMax=val; case 'steps', opts.steps=val; case 'sampleevery', opts.sampleEvery=val; case 'summaryevery', opts.summaryEvery=val; case 'dt', opts.dt=val; case 'alphadeg', opts.alphaDeg=val; case 'kbt', opts.kBT=val; opts.wallVirtualParticlesKBT=val; case 'particlemass', opts.particleMass=val; opts.wallVirtualParticleMass=val; case 'bodyforcex', opts.bodyForceX=val; case 'wallmodey', opts.wallModeY=char(string(val)); case 'capacityfactor', opts.capacityFactor=val; case 'thermostatstrength', opts.thermostatStrength=val; case 'projectioninterpolationmethod', opts.projectionInterpolationMethod=char(string(val)); case 'extractselectionmode', opts.extractSelectionMode=lower(char(string(val))); case 'insertvelocitymode', opts.insertVelocityMode=lower(char(string(val))); case 'memoryminparticles', opts.memoryMinParticles=val; case 'remapmethod', opts.remapMethod=lower(char(string(val))); case 'massminfactor', opts.massMinFactor=val; case 'massmaxfactor', opts.massMaxFactor=val; case 'remapmasssafetymode', opts.remapMassSafetyMode=lower(char(string(val))); case 'masssafetyminfactor', opts.massSafetyMinFactor=val; case 'masssafetymaxfactor', opts.massSafetyMaxFactor=val; case 'constrainttolerance', opts.constraintTolerance=val; case 'preservepreeditvelocity', opts.preservePreEditVelocity=logical(val); case 'alwaysusepreeditvelocityforremap', opts.alwaysUsePreEditVelocityForRemap=logical(val); case 'initialpoiseuilleprofileenable', opts.initialPoiseuilleProfileEnable=logical(val); case 'initialpoiseuillenuguess', opts.initialPoiseuilleNuGuess=val; case 'initialpoiseuillescale', opts.initialPoiseuilleScale=val; case 'excludewallcells', opts.excludeWallCells=val; case 'fitstartfraction', opts.fitStartFraction=val; case 'poiseuillefitmodel', opts.poiseuilleFitModel=lower(char(string(val))); case 'visualevery', opts.visualEvery=val; case 'figureid', opts.figureId=val; case 'profilefigureid', opts.profileFigureId=val; case 'showprofilefigure', opts.showProfileFigure=logical(val); case 'saveframes', opts.saveFrames=logical(val); case 'saveframeevery', opts.saveFrameEvery=val; case 'savefinalfigures', opts.saveFinalFigures=logical(val); case 'framedirname', opts.frameDirName=char(string(val)); case 'particlemarkersize', opts.particleMarkerSize=val; case 'pngresolution', opts.pngResolution=val; case 'rngseed', opts.rngSeed=val;
         case 'wallvirtualparticlesenable', opts.wallVirtualParticlesEnable=logical(val); case 'wallvirtualparticlesgeometrymode', opts.wallVirtualParticlesGeometryMode=lower(char(string(val))); case 'wallvirtualparticlesforcerandomshifty', opts.wallVirtualParticlesForceRandomShiftY=logical(val); case 'wallvirtualparticlesdensityfactor', opts.wallVirtualParticlesDensityFactor=val; case 'wallvirtualparticlespercell', opts.wallVirtualParticlesPerCell=val; case 'wallvirtualparticlemass', opts.wallVirtualParticleMass=val; case 'wallvirtualparticlesthermal', opts.wallVirtualParticlesThermal=logical(val); case 'wallvirtualparticleskbt', opts.wallVirtualParticlesKBT=val; case 'wallvirtualparticlesstochasticcount', opts.wallVirtualParticlesStochasticCount=logical(val);
         otherwise, error('Unknown option: %s', key);

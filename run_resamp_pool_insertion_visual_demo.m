@@ -114,6 +114,10 @@ for step = 1:opts.steps
             'massMin', opts.massMinFactor * params.resampParticleMass, ...
             'massMax', opts.massMaxFactor * params.resampParticleMass, ...
             'constraintTolerance', opts.constraintTolerance, ...
+            'massSafetyEnable', opts.remapMassSafetyEnable, ...
+            'massSafetyMode', opts.remapMassSafetyMode, ...
+            'massSafetyMinFactor', opts.remapMassSafetyMinFactor, ...
+            'massSafetyMaxFactor', opts.remapMassSafetyMaxFactor, ...
             'computeDiagnostics', true};
         didPopulationEdit = get_field(extractDiag, 'nExtractedParticles', 0) > 0 || ...
             get_field(insertDiag, 'nInsertedParticles', 0) > 0;
@@ -162,13 +166,14 @@ for step = 1:opts.steps
         rows(irow) = make_row(step, step * params.dt, md, tg, stepDiag, insertDiag, extractDiag, remapDiag);
         fprintf(['visual resamp %-12s step=%6d t=%.4g Nact=%7d free=%7d ', ...
                  'N[min,max]=[%3g,%3g] Mrel=%.3e insertedNow=%s insertedCum=%s lastInsert=%s ', ...
-                 'poor=%4g over=%4g mRelStd=%.3e kBT=%.5g thermAfter=%.5g\n'], ...
+                 'poor=%4g over=%4g mRelStd=%.3e safetyCells=%s kBT=%.5g thermAfter=%.5g\n'], ...
             opts.method, step, step*params.dt, md.NpActive, md.Nfree, md.NMin, md.NMax, md.MRelRms, ...
             format_scalar(get_field(insertDiag, 'nInsertedParticles', NaN)), ...
             format_scalar(get_field(insertDiag, 'nInsertedParticlesCumulative', NaN)), ...
             format_scalar(get_field(insertDiag, 'lastInsertionStep', NaN)), ...
             get_field(insertDiag, 'nPoorCellsAfter', NaN), ...
-            get_field(insertDiag, 'nOverCellsAfter', NaN), md.mParticleRelStd, md.kBTWeighted, ...
+            get_field(insertDiag, 'nOverCellsAfter', NaN), md.mParticleRelStd, ...
+            format_scalar(get_field(remapDiag, 'nCellsMassSafetyApplied', NaN)), md.kBTWeighted, ...
             get_nested(stepDiag, {'thermostatAfterRemap','meanKBTAfter'}, NaN));
     end
 
@@ -261,6 +266,10 @@ params.resampMemoryMinParticles = opts.memoryMinParticles;
 params.resampExtractEvery = opts.extractEvery;
 params.resampExtractSelectionMode = opts.extractSelectionMode;
 params.resampPreservePreEditVelocity = opts.preservePreEditVelocity;
+params.resampMassSafetyEnable = opts.remapMassSafetyEnable;
+params.resampMassSafetyMode = opts.remapMassSafetyMode;
+params.resampMassSafetyMinFactor = opts.remapMassSafetyMinFactor;
+params.resampMassSafetyMaxFactor = opts.remapMassSafetyMaxFactor;
 params.computeDiagnostics = true;
 params.visualMaxParticles = opts.visualMaxParticles;
 params.visualQuiverScale = opts.visualQuiverScale;
@@ -309,12 +318,22 @@ opts.remapMethod = 'scale_preserve_velocity';
 opts.targetVelocityMode = 'preserve_cell_velocity';
 opts.massMinFactor = 0.05;
 opts.massMaxFactor = 20.0;
+opts.remapMassSafetyEnable = true;
+opts.remapMassSafetyMode = 'uniform_mass_velocity_shift';
+opts.remapMassSafetyMinFactor = 0.25;
+opts.remapMassSafetyMaxFactor = 4.0;
 opts.constraintTolerance = 1e-10;
 opts.initialDepletion = 'patch';
 opts.depletionPatchSize = [6 6];
 opts.depletionPatchCenter = [];
 opts.overpopulationPatchSize = [];
 opts.overpopulationPatchCenter = [];
+opts.populationHeterogeneityStd = 4.0;
+opts.populationHeterogeneityMin = [];
+opts.populationHeterogeneityMax = [];
+opts.populationHeterogeneityVelocityMode = 'taylor_green_at_new_position';
+opts.populationHeterogeneityThermalNoise = true;
+opts.populationHeterogeneityZeroGlobalMean = true;
 opts.figureId = 620;
 opts.debugFigureId = 621;
 opts.showDebugFigure = false;
@@ -413,6 +432,14 @@ for k = 1:2:numel(varargin)
             opts.massMinFactor = val;
         case 'massmaxfactor'
             opts.massMaxFactor = val;
+        case {'remapmasssafetyenable','masssafetyenable'}
+            opts.remapMassSafetyEnable = logical(val);
+        case {'remapmasssafetymode','masssafetymode'}
+            opts.remapMassSafetyMode = lower(char(string(val)));
+        case {'remapmasssafetyminfactor','masssafetyminfactor'}
+            opts.remapMassSafetyMinFactor = val;
+        case {'remapmasssafetymaxfactor','masssafetymaxfactor'}
+            opts.remapMassSafetyMaxFactor = val;
         case 'constrainttolerance'
             opts.constraintTolerance = val;
         case 'initialdepletion'
@@ -425,6 +452,18 @@ for k = 1:2:numel(varargin)
             opts.overpopulationPatchSize = val;
         case {'overpopulationpatchcenter','richpatchcenter'}
             opts.overpopulationPatchCenter = val;
+        case {'populationheterogeneitystd','heterogeneitystd','initialpopulationstd'}
+            opts.populationHeterogeneityStd = val;
+        case {'populationheterogeneitymin','heterogeneitymin','initialpopulationmin'}
+            opts.populationHeterogeneityMin = val;
+        case {'populationheterogeneitymax','heterogeneitymax','initialpopulationmax'}
+            opts.populationHeterogeneityMax = val;
+        case {'populationheterogeneityvelocitymode','heterogeneityvelocitymode'}
+            opts.populationHeterogeneityVelocityMode = lower(char(string(val)));
+        case {'populationheterogeneitythermalnoise','heterogeneitythermalnoise'}
+            opts.populationHeterogeneityThermalNoise = logical(val);
+        case {'populationheterogeneityzeroglobalmean','heterogeneityzeroglobalmean'}
+            opts.populationHeterogeneityZeroGlobalMean = logical(val);
         case 'figureid'
             opts.figureId = val;
         case 'debugfigureid'
@@ -489,7 +528,8 @@ function [state, info] = apply_initial_depletion(state, params, opts)
 % Modes:
 %   none/off             leave exact-per-cell initialization unchanged;
 %   patch                deactivate all particles in one patch (legacy empty pocket);
-%   paired_pockets       move particles from an empty patch into a rich patch.
+%   paired_pockets       move particles from an empty patch into a rich patch;
+%   heterogeneous_population distributed random target N_c with conserved Nactive.
 %
 % The paired-pockets mode is designed to exercise the complete recycling loop:
 % extraction from overpopulated cells -> free pool -> insertion into empty cells -> remap.
@@ -538,6 +578,26 @@ switch mode
         info.movedPerRichCell = movedPerCell(:).';
         return;
 
+    case {'heterogeneous_population','population_heterogeneous','heterogeneous','hetero','random_population','population_noise'}
+        popMin = opts.populationHeterogeneityMin;
+        popMax = opts.populationHeterogeneityMax;
+        if isempty(popMin)
+            popMin = max(0, floor(params.gamma - 3 * opts.populationHeterogeneityStd));
+        end
+        if isempty(popMax)
+            popMax = ceil(params.gamma + 3 * opts.populationHeterogeneityStd);
+        end
+        [state, heteroInfo] = resamp_apply_population_heterogeneity(state, params, ...
+            'populationStd', opts.populationHeterogeneityStd, ...
+            'populationMin', popMin, ...
+            'populationMax', popMax, ...
+            'velocityMode', opts.populationHeterogeneityVelocityMode, ...
+            'thermalNoise', opts.populationHeterogeneityThermalNoise, ...
+            'zeroGlobalMean', opts.populationHeterogeneityZeroGlobalMean, ...
+            'computeDiagnostics', true);
+        info = merge_initial_info(info, heteroInfo);
+        return;
+
     otherwise
         error('Unknown initialDepletion mode: %s', mode);
 end
@@ -554,6 +614,30 @@ info.NactiveAfter = NaN;
 info.emptyPatchCells = [];
 info.richPatchCells = [];
 info.movedPerRichCell = [];
+info.populationStdRequested = NaN;
+info.populationMinClamp = NaN;
+info.populationMaxClamp = NaN;
+info.nMovedParticles = NaN;
+info.nDonorCells = NaN;
+info.nReceiverCells = NaN;
+info.targetNMin = NaN;
+info.targetNMax = NaN;
+info.targetNStd = NaN;
+info.NMinAfter = NaN;
+info.NMaxAfter = NaN;
+info.NStdAfter = NaN;
+info.MRelRmsAfter = NaN;
+end
+
+
+function info = merge_initial_info(info, extra)
+if ~isstruct(extra)
+    return;
+end
+names = fieldnames(extra);
+for kk = 1:numel(names)
+    info.(names{kk}) = extra.(names{kk});
+end
 end
 
 function cells = patch_cell_ids(Nx, Ny, patchSize, patchCenter, defaultCenter)
@@ -675,6 +759,13 @@ row.thermostatAfterRemapMeanKBTAfter = NaN;
 row.thermostatAfterRemapMeanScale = NaN;
 row.thermostatAfterRemapRmsVelocityChange = NaN;
 row.remapMassResidualRelRms = NaN;
+row.remapMassSafetyCells = NaN;
+row.remapMassSafetyParticles = NaN;
+row.remapMassSafetyInfeasibleCells = NaN;
+row.remapMassSafetyVelocityShiftRms = NaN;
+row.remapMassSafetyVelocityShiftMax = NaN;
+row.remapMassSafetyCandidateMinFactor = NaN;
+row.remapMassSafetyCandidateMaxFactor = NaN;
 row.remapMomentumResidualRms = NaN;
 row.remapSuccessFractionNonEmpty = NaN;
 end
@@ -734,6 +825,13 @@ row.thermostatAfterRemapMeanKBTAfter = get_nested(stepDiag, {'thermostatAfterRem
 row.thermostatAfterRemapMeanScale = get_nested(stepDiag, {'thermostatAfterRemap','meanScale'}, NaN);
 row.thermostatAfterRemapRmsVelocityChange = get_nested(stepDiag, {'thermostatAfterRemap','rmsVelocityChange'}, NaN);
 row.remapMassResidualRelRms = get_field(remapDiag, 'massResidualRelRms', NaN);
+row.remapMassSafetyCells = get_field(remapDiag, 'nCellsMassSafetyApplied', NaN);
+row.remapMassSafetyParticles = get_field(remapDiag, 'nParticlesMassSafetyApplied', NaN);
+row.remapMassSafetyInfeasibleCells = get_field(remapDiag, 'nCellsMassSafetyInfeasible', NaN);
+row.remapMassSafetyVelocityShiftRms = get_field(remapDiag, 'massSafetyVelocityShiftRms', NaN);
+row.remapMassSafetyVelocityShiftMax = get_field(remapDiag, 'massSafetyVelocityShiftMax', NaN);
+row.remapMassSafetyCandidateMinFactor = get_field(remapDiag, 'massSafetyCandidateMinFactor', NaN);
+row.remapMassSafetyCandidateMaxFactor = get_field(remapDiag, 'massSafetyCandidateMaxFactor', NaN);
 row.remapMomentumResidualRms = get_field(remapDiag, 'momentumResidualRms', NaN);
 row.remapSuccessFractionNonEmpty = get_field(remapDiag, 'successFractionNonEmpty', NaN);
 end
@@ -757,7 +855,11 @@ d = struct('nExtractedParticles', NaN, 'nCellsExtracted', NaN, 'nPoorCellsAfter'
 end
 
 function d = empty_remap_diag()
-d = struct('massResidualRelRms', NaN, 'momentumResidualRms', NaN, 'successFractionNonEmpty', NaN);
+d = struct('massResidualRelRms', NaN, 'momentumResidualRms', NaN, 'successFractionNonEmpty', NaN, ...
+    'nCellsMassSafetyApplied', NaN, 'nParticlesMassSafetyApplied', NaN, ...
+    'nCellsMassSafetyInfeasible', NaN, 'massSafetyVelocityShiftRms', NaN, ...
+    'massSafetyVelocityShiftMax', NaN, 'massSafetyCandidateMinFactor', NaN, ...
+    'massSafetyCandidateMaxFactor', NaN);
 end
 
 

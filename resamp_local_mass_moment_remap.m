@@ -29,6 +29,10 @@ periodicY = true;
 minMass = eps;
 tol = 1e-10;
 computeDiagnostics = true;
+massSafetyEnable = false;
+massSafetyMinFactor = 0.25;
+massSafetyMaxFactor = 4.0;
+massSafetyMode = 'uniform_mass_velocity_shift';
 
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
@@ -58,6 +62,14 @@ for k = 1:2:numel(varargin)
             tol = val;
         case "computediagnostics"
             computeDiagnostics = logical(val);
+        case {"masssafetyenable", "remapmasssafetyenable"}
+            massSafetyEnable = logical(val);
+        case {"masssafetyminfactor", "remapmasssafetyminfactor"}
+            massSafetyMinFactor = val;
+        case {"masssafetymaxfactor", "remapmasssafetymaxfactor"}
+            massSafetyMaxFactor = val;
+        case {"masssafetymode", "remapmasssafetymode"}
+            massSafetyMode = lower(char(string(val)));
         otherwise
             error('Unknown option: %s', string(key));
     end
@@ -97,6 +109,7 @@ UyVec = reshape(Gbefore.Uy.', [Nc, 1]);
 
 mOldAll = state.m(:);
 mNewAll = mOldAll;
+vNewAll = state.v;
 cellSuccess = false(Nc, 1);
 cellSkippedEmpty = false(Nc, 1);
 cellUsedSolver = false(Nc, 1);
@@ -106,6 +119,13 @@ momentumResidualX = zeros(Nc, 1);
 momentumResidualY = zeros(Nc, 1);
 solverResidualRel = NaN(Nc, 1);
 deltaMassRmsRelCell = NaN(Nc, 1);
+massSafetyApplied = false(Nc, 1);
+massSafetyTriggeredLow = false(Nc, 1);
+massSafetyTriggeredHigh = false(Nc, 1);
+massSafetyInfeasible = false(Nc, 1);
+massSafetyShiftNorm = NaN(Nc, 1);
+massSafetyCandidateMinFactor = NaN(Nc, 1);
+massSafetyCandidateMaxFactor = NaN(Nc, 1);
 
 for c = 1:Nc
     ids = find(activeMask & cellId == c);
@@ -160,6 +180,35 @@ for c = 1:Nc
             error('Unknown remap method: %s', method);
     end
 
+    candidateMinFactor = min(mCandidate) / max(nominalParticleMass, eps);
+    candidateMaxFactor = max(mCandidate) / max(nominalParticleMass, eps);
+    massSafetyCandidateMinFactor(c) = candidateMinFactor;
+    massSafetyCandidateMaxFactor(c) = candidateMaxFactor;
+    doSafety = false;
+    switch massSafetyMode
+        case {'off','none','disabled'}
+            doSafety = false;
+        case {'uniform_mass_velocity_shift','uniform_velocity_shift','conditional_uniform_velocity_shift'}
+            doSafety = massSafetyEnable && (candidateMinFactor < massSafetyMinFactor - tol || ...
+                candidateMaxFactor > massSafetyMaxFactor + tol);
+        case {'always_uniform_mass_velocity_shift','always_uniform_velocity_shift'}
+            doSafety = massSafetyEnable;
+        otherwise
+            error('Unknown massSafetyMode: %s', massSafetyMode);
+    end
+
+    if doSafety
+        [mCandidate, vCandidate, sinfoSafety] = local_uniform_mass_velocity_shift(vCell, Mtarget, Utarget, ...
+            nominalParticleMass, massSafetyMinFactor, massSafetyMaxFactor, tol);
+        vNewAll(ids,:) = vCandidate;
+        sinfo = sinfoSafety;
+        massSafetyApplied(c) = true;
+        massSafetyTriggeredLow(c) = candidateMinFactor < massSafetyMinFactor - tol;
+        massSafetyTriggeredHigh(c) = candidateMaxFactor > massSafetyMaxFactor + tol;
+        massSafetyInfeasible(c) = get_sinfo_field(sinfoSafety, 'safetyInfeasible', false);
+        massSafetyShiftNorm(c) = get_sinfo_field(sinfoSafety, 'velocityShiftNorm', NaN);
+    end
+
     mNewAll(ids) = mCandidate;
     cellSuccess(c) = sinfo.success;
     cellBounded(c) = isfield(sinfo, 'nActiveLower') && (sinfo.nActiveLower + sinfo.nActiveUpper > 0);
@@ -172,6 +221,7 @@ end
 
 stateOut = state;
 stateOut.m = mNewAll;
+stateOut.v = vNewAll;
 stateOut.Nactive = nnz(activeMask);
 stateOut.Ncapacity = size(stateOut.x,1);
 Gafter = resamp_deposit_weighted_to_grid(stateOut.x, stateOut.v, stateOut.m, params, ...
@@ -203,6 +253,10 @@ diag.targetVelocityMode = targetVelocityMode;
 diag.targetCellMassMean = mean(targetMassVec, 'omitnan');
 diag.massMin = massMin;
 diag.massMax = massMax;
+diag.massSafetyEnable = massSafetyEnable;
+diag.massSafetyMode = massSafetyMode;
+diag.massSafetyMinFactor = massSafetyMinFactor;
+diag.massSafetyMaxFactor = massSafetyMaxFactor;
 diag.nCells = Nc;
 diag.nCellsNonEmpty = nnz(~cellSkippedEmpty);
 diag.nCellsEmpty = nnz(cellSkippedEmpty);
@@ -210,6 +264,15 @@ diag.nCellsSolved = nnz(cellSuccess);
 diag.nCellsUnresolved = nnz(~cellSuccess & ~cellSkippedEmpty);
 diag.nCellsUsedSolver = nnz(cellUsedSolver);
 diag.nCellsBounded = nnz(cellBounded);
+diag.nCellsMassSafetyApplied = nnz(massSafetyApplied);
+diag.nParticlesMassSafetyApplied = sum(Nvec(massSafetyApplied));
+diag.nCellsMassSafetyTriggeredLow = nnz(massSafetyTriggeredLow);
+diag.nCellsMassSafetyTriggeredHigh = nnz(massSafetyTriggeredHigh);
+diag.nCellsMassSafetyInfeasible = nnz(massSafetyInfeasible);
+diag.massSafetyVelocityShiftRms = sqrt(mean(massSafetyShiftNorm(massSafetyApplied).^2, 'omitnan'));
+diag.massSafetyVelocityShiftMax = max(massSafetyShiftNorm(massSafetyApplied), [], 'omitnan');
+diag.massSafetyCandidateMinFactor = min(massSafetyCandidateMinFactor, [], 'omitnan');
+diag.massSafetyCandidateMaxFactor = max(massSafetyCandidateMaxFactor, [], 'omitnan');
 diag.successFractionNonEmpty = diag.nCellsSolved / max(diag.nCellsNonEmpty, 1);
 diag.massResidualRms = sqrt(mean(finalMassResidual.^2, 'omitnan'));
 diag.massResidualMaxAbs = max(abs(finalMassResidual));
@@ -228,7 +291,7 @@ diag.totalMassBefore = sum(mOldAll(activeMask), 'omitnan');
 diag.totalMassAfter = sum(mNewAll(activeAfter), 'omitnan');
 diag.totalMassTarget = sum(targetMassVec, 'omitnan');
 diag.totalMomentumBefore = [sum(mOldAll(activeMask) .* state.v(activeMask,1), 'omitnan'), sum(mOldAll(activeMask) .* state.v(activeMask,2), 'omitnan')];
-diag.totalMomentumAfter = [sum(mNewAll(activeAfter) .* state.v(activeAfter,1), 'omitnan'), sum(mNewAll(activeAfter) .* state.v(activeAfter,2), 'omitnan')];
+diag.totalMomentumAfter = [sum(mNewAll(activeAfter) .* stateOut.v(activeAfter,1), 'omitnan'), sum(mNewAll(activeAfter) .* stateOut.v(activeAfter,2), 'omitnan')];
 diag.NpActive = nnz(activeAfter);
 diag.Ncapacity = size(stateOut.x,1);
 diag.Nfree = diag.Ncapacity - diag.NpActive;
@@ -238,6 +301,7 @@ diag.cellSkippedEmpty = [];
 diag.massResidualGrid = [];
 diag.momentumResidualXGrid = [];
 diag.momentumResidualYGrid = [];
+diag.massSafetyAppliedGrid = [];
 diag.Gbefore = [];
 diag.Gafter = [];
 if computeDiagnostics
@@ -246,6 +310,7 @@ if computeDiagnostics
     diag.massResidualGrid = reshape(finalMassResidual, [Ny, Nx]).';
     diag.momentumResidualXGrid = reshape(finalMomentumResidualX, [Ny, Nx]).';
     diag.momentumResidualYGrid = reshape(finalMomentumResidualY, [Ny, Nx]).';
+    diag.massSafetyAppliedGrid = reshape(massSafetyApplied, [Ny, Nx]).';
     diag.Gbefore = Gbefore;
     diag.Gafter = Gafter;
 end
@@ -270,6 +335,52 @@ info.momentumNew = [sum(mNew .* v(:,1)), sum(mNew .* v(:,2))];
 info.momentumTarget = Ptarget(:).';
 info.deltaMassL2 = norm(mNew - mOld);
 info.deltaMassRelRms = sqrt(mean(((mNew - mOld) ./ max(mean(mOld), eps)).^2, 'omitnan'));
+end
+
+
+function [mNew, vNew, info] = local_uniform_mass_velocity_shift(v, Mtarget, Utarget, nominalParticleMass, safetyMinFactor, safetyMaxFactor, tol)
+%LOCAL_UNIFORM_MASS_VELOCITY_SHIFT Bounded fallback for edited populations.
+%
+% The fallback keeps the particle support well conditioned by assigning the
+% same mass Mtarget/N to all particles in the cell, then applies one uniform
+% velocity shift so that the cell momentum is exactly Mtarget*Utarget.  This
+% preserves relative thermal fluctuations and avoids using extreme masses to
+% satisfy the momentum constraint after extraction/insertion.
+
+n = size(v, 1);
+if n <= 0
+    mNew = zeros(0,1);
+    vNew = v;
+    info = local_constraint_info(v, zeros(0,1), zeros(0,1), Mtarget, Mtarget * Utarget, tol);
+    info.safetyInfeasible = true;
+    info.velocityShift = [NaN, NaN];
+    info.velocityShiftNorm = NaN;
+    return;
+end
+mUniform = Mtarget / n;
+mNew = repmat(mUniform, n, 1);
+Ptarget = Mtarget * Utarget;
+Ucurrent = sum(mNew .* v, 1) / max(sum(mNew), eps);
+deltaU = Utarget - Ucurrent;
+vNew = v + deltaU;
+info = local_constraint_info(vNew, repmat(nominalParticleMass, n, 1), mNew, Mtarget, Ptarget, tol);
+info.usedMassSafety = true;
+info.velocityShift = deltaU;
+info.velocityShiftNorm = norm(deltaU);
+info.uniformMass = mUniform;
+info.uniformMassFactor = mUniform / max(nominalParticleMass, eps);
+info.safetyInfeasible = (info.uniformMassFactor < safetyMinFactor - tol) || ...
+    (info.uniformMassFactor > safetyMaxFactor + tol);
+info.nActiveLower = double(info.uniformMassFactor < safetyMinFactor - tol) * n;
+info.nActiveUpper = double(info.uniformMassFactor > safetyMaxFactor + tol) * n;
+end
+
+function v = get_sinfo_field(s, name, defaultValue)
+if isstruct(s) && isfield(s, name) && ~isempty(s.(name))
+    v = s.(name);
+else
+    v = defaultValue;
+end
 end
 
 function validate_state(state)

@@ -45,8 +45,16 @@ for k = 1:2:numel(varargin)
     val = varargin{k+1};
     switch key
         case {'cellwetmask','wetmask','fluidmask','activecellmask'}
-            cellWetMask = logical(val);
-            mode = 'explicit';
+            % Empty masks are common when callers simply forward an optional
+            % argument.  They must not force explicit/manual mode; otherwise
+            % all-wet default initialization fails before state.cellWetMask
+            % exists.  A non-empty mask remains an explicit user request.
+            if isempty(val)
+                cellWetMask = [];
+            else
+                cellWetMask = logical(val);
+                mode = 'explicit';
+            end
         case {'mode','wetmaskmode'}
             mode = lower(char(string(val)));
         case {'wetmassthreshold','massthreshold'}

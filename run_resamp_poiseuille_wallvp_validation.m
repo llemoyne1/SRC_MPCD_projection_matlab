@@ -51,7 +51,7 @@ allCases(2).NMin = opts.NMin;
 allCases(2).NMax = opts.NMax;
 
 wanted = normalize_case_list(opts.cases);
-caseDefs = struct([]);
+caseDefs = allCases([]);
 n = 0;
 for i = 1:numel(allCases)
     if any(strcmp(allCases(i).label, wanted))

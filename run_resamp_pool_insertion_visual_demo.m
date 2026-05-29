@@ -20,7 +20,7 @@ params.visualMaxParticles = opts.visualMaxParticles;
 [state, initInfo] = resamp_initialize_particles_taylor_green_forced(params);
 [state, poolInfo0] = resamp_enable_particle_pool(state, 'capacityFactor', opts.capacityFactor);
 state = initialize_velocity_memory(state, params);
-state = apply_initial_depletion(state, params, opts);
+[state, initialPopulationEditInfo] = apply_initial_depletion(state, params, opts);
 
 if ~exist(opts.outputDir, 'dir')
     mkdir(opts.outputDir);
@@ -195,6 +195,7 @@ out = struct();
 out.params = params;
 out.options = opts;
 out.initialInfo = initInfo;
+out.initialPopulationEditInfo = initialPopulationEditInfo;
 out.initialPoolInfo = poolInfo0;
 out.state = state;
 out.summary = summary;
@@ -312,6 +313,8 @@ opts.constraintTolerance = 1e-10;
 opts.initialDepletion = 'patch';
 opts.depletionPatchSize = [6 6];
 opts.depletionPatchCenter = [];
+opts.overpopulationPatchSize = [];
+opts.overpopulationPatchCenter = [];
 opts.figureId = 620;
 opts.debugFigureId = 621;
 opts.showDebugFigure = false;
@@ -418,6 +421,10 @@ for k = 1:2:numel(varargin)
             opts.depletionPatchSize = val;
         case 'depletionpatchcenter'
             opts.depletionPatchCenter = val;
+        case {'overpopulationpatchsize','richpatchsize'}
+            opts.overpopulationPatchSize = val;
+        case {'overpopulationpatchcenter','richpatchcenter'}
+            opts.overpopulationPatchCenter = val;
         case 'figureid'
             opts.figureId = val;
         case 'debugfigureid'
@@ -476,42 +483,140 @@ state.uMemUy = G.Uy;
 state.uMemValid = G.N > 0;
 end
 
-function state = apply_initial_depletion(state, params, opts)
+function [state, info] = apply_initial_depletion(state, params, opts)
+%APPLY_INITIAL_DEPLETION Deterministic initial population edits for pool tests.
+%
+% Modes:
+%   none/off             leave exact-per-cell initialization unchanged;
+%   patch                deactivate all particles in one patch (legacy empty pocket);
+%   paired_pockets       move particles from an empty patch into a rich patch.
+%
+% The paired-pockets mode is designed to exercise the complete recycling loop:
+% extraction from overpopulated cells -> free pool -> insertion into empty cells -> remap.
+% It keeps Nactive unchanged at t=0 while creating exactly one poor pocket and one rich pocket.
+
 mode = lower(char(string(opts.initialDepletion)));
+info = empty_initial_population_edit_info(mode);
 if strcmp(mode, 'none') || strcmp(mode, 'off')
     return;
 end
-if ~strcmp(mode, 'patch')
-    error('Unknown initialDepletion mode: %s', mode);
-end
 Nx = params.Nx;
 Ny = params.Ny;
-if isempty(opts.depletionPatchCenter)
-    cx = floor(Nx/2);
-    cy = floor(Ny/2);
-else
-    cx = opts.depletionPatchCenter(1);
-    cy = opts.depletionPatchCenter(2);
+emptyCells = patch_cell_ids(Nx, Ny, opts.depletionPatchSize, opts.depletionPatchCenter, [floor(Nx/2), floor(Ny/2)]);
+
+switch mode
+    case 'patch'
+        [state, killedIds] = deactivate_cells(state, params, emptyCells);
+        info.mode = mode;
+        info.nEmptyPatchCells = numel(emptyCells);
+        info.nParticlesRemoved = numel(killedIds);
+        info.nParticlesMovedToRichPatch = 0;
+        info.NactiveAfter = nnz(resamp_active_mask(state));
+        return;
+
+    case {'paired_pockets','empty_overpop','empty_and_overpop','empty_and_overpopulated','empty_overpopulated_patches'}
+        if isempty(opts.overpopulationPatchSize)
+            richSize = opts.depletionPatchSize;
+        else
+            richSize = opts.overpopulationPatchSize;
+        end
+        richDefaultCenter = [max(1, floor(Nx/4)), max(1, floor(Ny/4))];
+        richCells = patch_cell_ids(Nx, Ny, richSize, opts.overpopulationPatchCenter, richDefaultCenter);
+        if any(ismember(emptyCells, richCells))
+            error(['Initial paired pockets overlap. Choose non-overlapping depletionPatchCenter ', ...
+                   'and overpopulationPatchCenter.']);
+        end
+        [state, movedIds, movedPerCell] = move_particles_from_empty_to_rich_patch(state, params, emptyCells, richCells);
+        info.mode = mode;
+        info.nEmptyPatchCells = numel(emptyCells);
+        info.nRichPatchCells = numel(richCells);
+        info.nParticlesRemoved = 0;
+        info.nParticlesMovedToRichPatch = numel(movedIds);
+        info.NactiveAfter = nnz(resamp_active_mask(state));
+        info.emptyPatchCells = emptyCells(:).';
+        info.richPatchCells = richCells(:).';
+        info.movedPerRichCell = movedPerCell(:).';
+        return;
+
+    otherwise
+        error('Unknown initialDepletion mode: %s', mode);
 end
-sx = opts.depletionPatchSize(1);
-sy = opts.depletionPatchSize(2);
+end
+
+function info = empty_initial_population_edit_info(mode)
+info = struct();
+info.mode = mode;
+info.nEmptyPatchCells = 0;
+info.nRichPatchCells = 0;
+info.nParticlesRemoved = 0;
+info.nParticlesMovedToRichPatch = 0;
+info.NactiveAfter = NaN;
+info.emptyPatchCells = [];
+info.richPatchCells = [];
+info.movedPerRichCell = [];
+end
+
+function cells = patch_cell_ids(Nx, Ny, patchSize, patchCenter, defaultCenter)
+if isempty(patchSize)
+    patchSize = [6 6];
+end
+sx = patchSize(1);
+sy = patchSize(2);
+if isempty(patchCenter)
+    cx = defaultCenter(1);
+    cy = defaultCenter(2);
+else
+    cx = patchCenter(1);
+    cy = patchCenter(2);
+end
 ixList = mod((cx - floor(sx/2)):(cx - floor(sx/2) + sx - 1) - 1, Nx) + 1;
 iyList = mod((cy - floor(sy/2)):(cy - floor(sy/2) + sy - 1) - 1, Ny) + 1;
+[IX, IY] = ndgrid(ixList, iyList);
+cells = (IX(:) - 1) * Ny + IY(:);
+cells = unique(cells(:), 'stable');
+end
+
+function [state, idsKill] = deactivate_cells(state, params, cellsToDeactivate)
 activeMask = resamp_active_mask(state);
 cellId = resamp_cell_ids_periodic(state.x(activeMask,:), params, 'periodicX', true, 'periodicY', true);
 activeIds = find(activeMask);
-kill = false(size(activeIds));
-for k = 1:numel(activeIds)
-    c = cellId(k);
-    ix = floor((c - 1) / Ny) + 1;
-    iy = c - Ny * (ix - 1);
-    kill(k) = any(ixList == ix) && any(iyList == iy);
-end
+kill = ismember(cellId(:), cellsToDeactivate(:));
 idsKill = activeIds(kill);
 state.active(idsKill) = false;
 state.m(idsKill) = 0;
 state.v(idsKill,:) = 0;
 state.x(idsKill,:) = 0;
+state.Nactive = nnz(resamp_active_mask(state));
+end
+
+function [state, movedIds, movedPerRichCell] = move_particles_from_empty_to_rich_patch(state, params, emptyCells, richCells)
+% Move active particles from one patch into another one without changing Nactive.
+% This creates a true empty pocket and a true overpopulated pocket at t=0.
+Nx = params.Nx;
+Ny = params.Ny;
+dx = params.Lx / Nx;
+dy = params.Ly / Ny;
+activeMask = resamp_active_mask(state);
+cellId = resamp_cell_ids_periodic(state.x(activeMask,:), params, 'periodicX', true, 'periodicY', true);
+activeIds = find(activeMask);
+moveMask = ismember(cellId(:), emptyCells(:));
+movedIds = activeIds(moveMask);
+if isempty(movedIds)
+    movedPerRichCell = zeros(numel(richCells), 1);
+    state.Nactive = nnz(resamp_active_mask(state));
+    return;
+end
+nMove = numel(movedIds);
+nRich = numel(richCells);
+richAssign = richCells(mod((0:nMove-1)', nRich) + 1);
+movedPerRichCell = accumarray(mod((0:nMove-1)', nRich) + 1, 1, [nRich, 1], @sum, 0);
+for kk = 1:nMove
+    c = richAssign(kk);
+    ix = floor((c - 1) / Ny) + 1;
+    iy = c - Ny * (ix - 1);
+    state.x(movedIds(kk),1) = (ix - 1 + rand()) * dx;
+    state.x(movedIds(kk),2) = (iy - 1 + rand()) * dy;
+end
 state.Nactive = nnz(resamp_active_mask(state));
 end
 

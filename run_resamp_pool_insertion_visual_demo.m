@@ -21,6 +21,14 @@ params.visualMaxParticles = opts.visualMaxParticles;
 [state, poolInfo0] = resamp_enable_particle_pool(state, 'capacityFactor', opts.capacityFactor);
 state = initialize_velocity_memory(state, params);
 [state, initialPopulationEditInfo] = apply_initial_depletion(state, params, opts);
+[state, initialWetMaskInfo] = resamp_update_cell_wet_mask(state, params, ...
+    'mode', opts.initialWetMaskMode, ...
+    'cellWetMask', opts.cellWetMask, ...
+    'wetMassOnThreshold', opts.wetMassOnThreshold, ...
+    'wetMassOffThreshold', opts.wetMassOffThreshold, ...
+    'wetParticleOnThreshold', opts.wetParticleOnThreshold, ...
+    'wetParticleOffThreshold', opts.wetParticleOffThreshold);
+params.cellWetMask = state.cellWetMask;
 
 if ~exist(opts.outputDir, 'dir')
     mkdir(opts.outputDir);
@@ -61,6 +69,19 @@ lastRemapDiag = empty_remap_diag();
 lastThermostatAfterRemapDiag = thermostatAfterRemapDiag;
 
 for step = 1:opts.steps
+    if opts.wetMaskUpdateEvery > 0 && mod(step, opts.wetMaskUpdateEvery) == 0
+        [state, wetMaskInfo] = resamp_update_cell_wet_mask(state, params, ...
+            'mode', opts.wetMaskUpdateMode, ...
+            'cellWetMask', opts.cellWetMask, ...
+            'wetMassOnThreshold', opts.wetMassOnThreshold, ...
+            'wetMassOffThreshold', opts.wetMassOffThreshold, ...
+            'wetParticleOnThreshold', opts.wetParticleOnThreshold, ...
+            'wetParticleOffThreshold', opts.wetParticleOffThreshold);
+        params.cellWetMask = state.cellWetMask;
+    else
+        wetMaskInfo = empty_wet_mask_update_diag();
+    end
+
     switch opts.method
         case 'weighted_classic'
             [state, stepDiag] = resamp_step_classic_periodic_weighted(state, params);
@@ -73,7 +94,7 @@ for step = 1:opts.steps
     if opts.preservePreEditVelocity && opts.remapEvery > 0 && mod(step, opts.remapEvery) == 0
         activePreEdit = resamp_active_mask(state);
         preEditG = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
-            'periodicX', true, 'periodicY', true, 'activeMask', activePreEdit);
+            'periodicX', true, 'periodicY', true, 'activeMask', activePreEdit, 'cellWetMask', state.cellWetMask);
     end
 
     if opts.extractEvery > 0 && mod(step, opts.extractEvery) == 0
@@ -125,7 +146,7 @@ for step = 1:opts.steps
             if isempty(preEditG)
                 activePreEdit = resamp_active_mask(state);
                 preEditG = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
-                    'periodicX', true, 'periodicY', true, 'activeMask', activePreEdit);
+                    'periodicX', true, 'periodicY', true, 'activeMask', activePreEdit, 'cellWetMask', state.cellWetMask);
             end
             remapTargetVelocityMode = 'grid';
             remapArgs = [remapArgs, {'targetVelocityMode', remapTargetVelocityMode, ...
@@ -202,6 +223,9 @@ out.options = opts;
 out.initialInfo = initInfo;
 out.initialPopulationEditInfo = initialPopulationEditInfo;
 out.initialPoolInfo = poolInfo0;
+out.initialWetMaskInfo = initialWetMaskInfo;
+out.finalWetMask = state.cellWetMask;
+[~, out.finalWetMaskInfo] = resamp_cell_wet_mask(state, params, 'mode', 'auto');
 out.state = state;
 out.summary = summary;
 out.finalMassDiagnostics = md;
@@ -263,6 +287,10 @@ params.resampNTarget = opts.NTarget;
 params.resampNMin = opts.NMin;
 params.resampNMax = opts.NMax;
 params.resampMemoryMinParticles = opts.memoryMinParticles;
+params.resampWetMassOnThreshold = opts.wetMassOnThreshold;
+params.resampWetMassOffThreshold = opts.wetMassOffThreshold;
+params.resampWetParticleOnThreshold = opts.wetParticleOnThreshold;
+params.resampWetParticleOffThreshold = opts.wetParticleOffThreshold;
 params.resampExtractEvery = opts.extractEvery;
 params.resampExtractSelectionMode = opts.extractSelectionMode;
 params.resampPreservePreEditVelocity = opts.preservePreEditVelocity;
@@ -307,6 +335,14 @@ opts.NTarget = [];
 opts.NMin = [];
 opts.NMax = [];
 opts.memoryMinParticles = [];
+opts.initialWetMaskMode = 'all';
+opts.wetMaskUpdateMode = 'none';
+opts.wetMaskUpdateEvery = 0;
+opts.cellWetMask = [];
+opts.wetMassOnThreshold = [];
+opts.wetMassOffThreshold = [];
+opts.wetParticleOnThreshold = [];
+opts.wetParticleOffThreshold = [];
 opts.extractEvery = 0;
 opts.extractSelectionMode = 'closest_to_cell_mean';
 opts.preservePreEditVelocity = true;
@@ -410,6 +446,22 @@ for k = 1:2:numel(varargin)
             opts.NMax = val;
         case 'memoryminparticles'
             opts.memoryMinParticles = val;
+        case {'initialwetmaskmode','cellwetmaskmode'}
+            opts.initialWetMaskMode = lower(char(string(val)));
+        case 'wetmaskupdatemode'
+            opts.wetMaskUpdateMode = lower(char(string(val)));
+        case 'wetmaskupdateevery'
+            opts.wetMaskUpdateEvery = val;
+        case {'cellwetmask','wetmask'}
+            opts.cellWetMask = logical(val);
+        case {'wetmassonthreshold','massonthreshold'}
+            opts.wetMassOnThreshold = val;
+        case {'wetmassoffthreshold','massoffthreshold'}
+            opts.wetMassOffThreshold = val;
+        case {'wetparticleonthreshold','particleonthreshold'}
+            opts.wetParticleOnThreshold = val;
+        case {'wetparticleoffthreshold','particleoffthreshold'}
+            opts.wetParticleOffThreshold = val;
         case 'extractevery'
             opts.extractEvery = val;
         case {'extractselectionmode','selectionmode'}
@@ -501,6 +553,18 @@ if isempty(opts.insertKBT)
 end
 if isempty(opts.thermostatTargetKBT)
     opts.thermostatTargetKBT = opts.kBT;
+end
+if isempty(opts.wetMassOnThreshold)
+    opts.wetMassOnThreshold = 0.5 * opts.NTarget * opts.particleMass;
+end
+if isempty(opts.wetMassOffThreshold)
+    opts.wetMassOffThreshold = 0.05 * opts.NTarget * opts.particleMass;
+end
+if isempty(opts.wetParticleOnThreshold)
+    opts.wetParticleOnThreshold = max(1, ceil(0.5 * opts.NTarget));
+end
+if isempty(opts.wetParticleOffThreshold)
+    opts.wetParticleOffThreshold = 0;
 end
 end
 
@@ -712,6 +776,9 @@ row.NpActive = NaN;
 row.Ncapacity = NaN;
 row.Nfree = NaN;
 row.activeFraction = NaN;
+row.nWetCells = NaN;
+row.nDryCells = NaN;
+row.wetFraction = NaN;
 row.NMean = NaN;
 row.NStd = NaN;
 row.NMin = NaN;
@@ -778,6 +845,9 @@ row.NpActive = md.NpActive;
 row.Ncapacity = md.Ncapacity;
 row.Nfree = md.Nfree;
 row.activeFraction = md.activeFraction;
+row.nWetCells = get_field(md, 'nWetCells', NaN);
+row.nDryCells = get_field(md, 'nDryCells', NaN);
+row.wetFraction = get_field(md, 'wetFraction', NaN);
 row.NMean = md.NMean;
 row.NStd = md.NStd;
 row.NMin = md.NMin;
@@ -834,6 +904,12 @@ row.remapMassSafetyCandidateMinFactor = get_field(remapDiag, 'massSafetyCandidat
 row.remapMassSafetyCandidateMaxFactor = get_field(remapDiag, 'massSafetyCandidateMaxFactor', NaN);
 row.remapMomentumResidualRms = get_field(remapDiag, 'momentumResidualRms', NaN);
 row.remapSuccessFractionNonEmpty = get_field(remapDiag, 'successFractionNonEmpty', NaN);
+end
+
+function d = empty_wet_mask_update_diag()
+d = struct('kind','update_cell_wet_mask','mode','none','nWetCellsBefore',NaN, ...
+    'nWetCellsAfter',NaN,'nDryCellsAfter',NaN,'wetFractionAfter',NaN, ...
+    'nCellsBecameWet',0,'nCellsBecameDry',0);
 end
 
 function d = empty_step_diag()

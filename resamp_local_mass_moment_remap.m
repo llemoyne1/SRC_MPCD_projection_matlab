@@ -29,6 +29,7 @@ periodicY = true;
 minMass = eps;
 tol = 1e-10;
 computeDiagnostics = true;
+cellWetMask = [];
 massSafetyEnable = false;
 massSafetyMinFactor = 0.25;
 massSafetyMaxFactor = 4.0;
@@ -62,6 +63,8 @@ for k = 1:2:numel(varargin)
             tol = val;
         case "computediagnostics"
             computeDiagnostics = logical(val);
+        case {"cellwetmask", "wetmask", "fluidmask"}
+            cellWetMask = logical(val);
         case {"masssafetyenable", "remapmasssafetyenable"}
             massSafetyEnable = logical(val);
         case {"masssafetyminfactor", "remapmasssafetyminfactor"}
@@ -76,6 +79,13 @@ for k = 1:2:numel(varargin)
 end
 
 Nc = Nx * Ny;
+if isempty(cellWetMask)
+    [cellWetMask, wetInfo] = resamp_cell_wet_mask(state, params, 'mode', 'auto');
+else
+    [cellWetMask, wetInfo] = resamp_cell_wet_mask(state, params, 'mode', 'explicit', 'cellWetMask', cellWetMask);
+end
+wetVec = reshape(cellWetMask.', [Nc, 1]);
+
 if isscalar(targetCellMass)
     targetMassVec = repmat(targetCellMass, Nc, 1);
 else
@@ -84,6 +94,7 @@ else
     end
     targetMassVec = reshape(targetCellMass.', [Nc, 1]);
 end
+targetMassVec(~wetVec) = 0;
 if strcmp(targetVelocityMode, 'grid')
     if isempty(targetUx) || isempty(targetUy)
         error('targetUx and targetUy are required when targetVelocityMode=''grid''.');
@@ -100,7 +111,7 @@ end
 
 activeMask = resamp_active_mask(state);
 Gbefore = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeMask);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeMask, 'cellWetMask', cellWetMask);
 cellId = Gbefore.cellId;
 Nvec = reshape(Gbefore.N.', [Nc, 1]);
 Mvec = reshape(Gbefore.M.', [Nc, 1]);
@@ -112,6 +123,7 @@ mNewAll = mOldAll;
 vNewAll = state.v;
 cellSuccess = false(Nc, 1);
 cellSkippedEmpty = false(Nc, 1);
+cellSkippedDry = false(Nc, 1);
 cellUsedSolver = false(Nc, 1);
 cellBounded = false(Nc, 1);
 massResidual = zeros(Nc, 1);
@@ -128,6 +140,13 @@ massSafetyCandidateMinFactor = NaN(Nc, 1);
 massSafetyCandidateMaxFactor = NaN(Nc, 1);
 
 for c = 1:Nc
+    if ~wetVec(c)
+        cellSkippedDry(c) = true;
+        massResidual(c) = 0;
+        momentumResidualX(c) = 0;
+        momentumResidualY(c) = 0;
+        continue;
+    end
     ids = find(activeMask & cellId == c);
     if isempty(ids)
         cellSkippedEmpty(c) = true;
@@ -225,7 +244,7 @@ stateOut.v = vNewAll;
 stateOut.Nactive = nnz(activeMask);
 stateOut.Ncapacity = size(stateOut.x,1);
 Gafter = resamp_deposit_weighted_to_grid(stateOut.x, stateOut.v, stateOut.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeMask);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeMask, 'cellWetMask', cellWetMask);
 
 Mafter = reshape(Gafter.M.', [Nc, 1]);
 PxAfter = reshape(Gafter.Px.', [Nc, 1]);
@@ -242,8 +261,11 @@ Pytarget = targetMassVec .* Uty;
 finalMassResidual = Mafter - targetMassVec;
 finalMomentumResidualX = PxAfter - Pxtarget;
 finalMomentumResidualY = PyAfter - Pytarget;
+finalMassResidual(~wetVec) = 0;
+finalMomentumResidualX(~wetVec) = 0;
+finalMomentumResidualY(~wetVec) = 0;
 
-mdAfter = resamp_population_mass_diagnostics(stateOut, params, 'periodicX', periodicX, 'periodicY', periodicY);
+mdAfter = resamp_population_mass_diagnostics(stateOut, params, 'periodicX', periodicX, 'periodicY', periodicY, 'cellWetMask', cellWetMask);
 activeAfter = resamp_active_mask(stateOut);
 
 diag = struct();
@@ -258,10 +280,13 @@ diag.massSafetyMode = massSafetyMode;
 diag.massSafetyMinFactor = massSafetyMinFactor;
 diag.massSafetyMaxFactor = massSafetyMaxFactor;
 diag.nCells = Nc;
-diag.nCellsNonEmpty = nnz(~cellSkippedEmpty);
-diag.nCellsEmpty = nnz(cellSkippedEmpty);
+diag.nWetCells = wetInfo.nWetCells;
+diag.nDryCells = wetInfo.nDryCells;
+diag.nCellsSkippedDry = nnz(cellSkippedDry);
+diag.nCellsNonEmpty = nnz(wetVec & ~cellSkippedEmpty);
+diag.nCellsEmpty = nnz(wetVec & cellSkippedEmpty);
 diag.nCellsSolved = nnz(cellSuccess);
-diag.nCellsUnresolved = nnz(~cellSuccess & ~cellSkippedEmpty);
+diag.nCellsUnresolved = nnz(wetVec & ~cellSuccess & ~cellSkippedEmpty);
 diag.nCellsUsedSolver = nnz(cellUsedSolver);
 diag.nCellsBounded = nnz(cellBounded);
 diag.nCellsMassSafetyApplied = nnz(massSafetyApplied);
@@ -271,14 +296,22 @@ diag.nCellsMassSafetyTriggeredHigh = nnz(massSafetyTriggeredHigh);
 diag.nCellsMassSafetyInfeasible = nnz(massSafetyInfeasible);
 diag.massSafetyVelocityShiftRms = sqrt(mean(massSafetyShiftNorm(massSafetyApplied).^2, 'omitnan'));
 diag.massSafetyVelocityShiftMax = max(massSafetyShiftNorm(massSafetyApplied), [], 'omitnan');
-diag.massSafetyCandidateMinFactor = min(massSafetyCandidateMinFactor, [], 'omitnan');
-diag.massSafetyCandidateMaxFactor = max(massSafetyCandidateMaxFactor, [], 'omitnan');
+diag.massSafetyCandidateMinFactor = min(massSafetyCandidateMinFactor(wetVec), [], 'omitnan');
+diag.massSafetyCandidateMaxFactor = max(massSafetyCandidateMaxFactor(wetVec), [], 'omitnan');
 diag.successFractionNonEmpty = diag.nCellsSolved / max(diag.nCellsNonEmpty, 1);
-diag.massResidualRms = sqrt(mean(finalMassResidual.^2, 'omitnan'));
-diag.massResidualMaxAbs = max(abs(finalMassResidual));
-diag.massResidualRelRms = sqrt(mean((finalMassResidual ./ max(abs(targetMassVec), eps)).^2, 'omitnan'));
-diag.momentumResidualRms = sqrt(mean(finalMomentumResidualX.^2 + finalMomentumResidualY.^2, 'omitnan'));
-diag.momentumResidualMaxNorm = max(hypot(finalMomentumResidualX, finalMomentumResidualY));
+if any(wetVec)
+    diag.massResidualRms = sqrt(mean(finalMassResidual(wetVec).^2, 'omitnan'));
+    diag.massResidualMaxAbs = max(abs(finalMassResidual(wetVec)));
+    diag.massResidualRelRms = sqrt(mean((finalMassResidual(wetVec) ./ max(abs(targetMassVec(wetVec)), eps)).^2, 'omitnan'));
+    diag.momentumResidualRms = sqrt(mean(finalMomentumResidualX(wetVec).^2 + finalMomentumResidualY(wetVec).^2, 'omitnan'));
+    diag.momentumResidualMaxNorm = max(hypot(finalMomentumResidualX(wetVec), finalMomentumResidualY(wetVec)));
+else
+    diag.massResidualRms = NaN;
+    diag.massResidualMaxAbs = NaN;
+    diag.massResidualRelRms = NaN;
+    diag.momentumResidualRms = NaN;
+    diag.momentumResidualMaxNorm = NaN;
+end
 diag.solverResidualRelMax = max(solverResidualRel, [], 'omitnan');
 diag.deltaMassMean = mean(mNewAll(activeAfter) - mOldAll(activeAfter), 'omitnan');
 diag.deltaMassRms = sqrt(mean((mNewAll(activeAfter) - mOldAll(activeAfter)).^2, 'omitnan'));
@@ -289,7 +322,7 @@ diag.mParticleMaxAfter = max(mNewAll(activeAfter));
 diag.mParticleStdAfter = std(mNewAll(activeAfter), 0, 'omitnan');
 diag.totalMassBefore = sum(mOldAll(activeMask), 'omitnan');
 diag.totalMassAfter = sum(mNewAll(activeAfter), 'omitnan');
-diag.totalMassTarget = sum(targetMassVec, 'omitnan');
+diag.totalMassTarget = sum(targetMassVec(wetVec), 'omitnan');
 diag.totalMomentumBefore = [sum(mOldAll(activeMask) .* state.v(activeMask,1), 'omitnan'), sum(mOldAll(activeMask) .* state.v(activeMask,2), 'omitnan')];
 diag.totalMomentumAfter = [sum(mNewAll(activeAfter) .* stateOut.v(activeAfter,1), 'omitnan'), sum(mNewAll(activeAfter) .* stateOut.v(activeAfter,2), 'omitnan')];
 diag.NpActive = nnz(activeAfter);
@@ -307,6 +340,8 @@ diag.Gafter = [];
 if computeDiagnostics
     diag.cellSuccess = reshape(cellSuccess, [Ny, Nx]).';
     diag.cellSkippedEmpty = reshape(cellSkippedEmpty, [Ny, Nx]).';
+    diag.cellSkippedDry = reshape(cellSkippedDry, [Ny, Nx]).';
+    diag.cellWetMask = cellWetMask;
     diag.massResidualGrid = reshape(finalMassResidual, [Ny, Nx]).';
     diag.momentumResidualXGrid = reshape(finalMomentumResidualX, [Ny, Nx]).';
     diag.momentumResidualYGrid = reshape(finalMomentumResidualY, [Ny, Nx]).';

@@ -8,6 +8,7 @@ function G = resamp_deposit_weighted_to_grid(x, v, m, params, varargin)
 %   'periodicY'   default false
 %   'minMass'     default eps
 %   'activeMask'  default all true
+%   'cellWetMask' default state/params/all-wet; stored in G.cellWetMask
 %
 % Output fields include N, M, Px, Py, Ux, Uy, rho, valid, cellId.  cellId has
 % one entry per storage row; inactive rows are set to zero and do not enter
@@ -32,6 +33,7 @@ periodicX = true;
 periodicY = false;
 minMass = eps;
 activeMask = true(Np, 1);
+cellWetMask = [];
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
     val = varargin{k+1};
@@ -44,6 +46,8 @@ for k = 1:2:numel(varargin)
             minMass = val;
         case {"activemask", "active"}
             activeMask = logical(val(:));
+        case {"cellwetmask", "wetmask", "fluidmask"}
+            cellWetMask = logical(val);
         otherwise
             error('Unknown option: %s', string(key));
     end
@@ -99,6 +103,12 @@ G.activeMask = activeMask;
 G.activeIndex = find(activeMask);
 G.dx = dx;
 G.dy = dy;
+[wetMask, wetInfo] = resamp_cell_wet_mask(struct('cellWetMask', cellWetMask), params, ...
+    'mode', ternary_empty(cellWetMask, 'auto', 'explicit'), 'cellWetMask', cellWetMask);
+G.cellWetMask = wetMask;
+G.nWetCells = wetInfo.nWetCells;
+G.nDryCells = wetInfo.nDryCells;
+G.wetFraction = wetInfo.wetFraction;
 G.Nx = Nx;
 G.Ny = Ny;
 G.Lx = Lx;
@@ -113,4 +123,12 @@ end
 G.Nactive = nnz(activeMask);
 G.Ncapacity = Np;
 G.Nfree = Np - nnz(activeMask);
+end
+
+function out = ternary_empty(x, a, b)
+if isempty(x)
+    out = a;
+else
+    out = b;
+end
 end

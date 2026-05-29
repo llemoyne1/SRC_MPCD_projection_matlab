@@ -31,6 +31,7 @@ insertVelocityMode = 'current_or_memory_pairwise';
 periodicX = true;
 periodicY = true;
 computeDiagnostics = true;
+cellWetMask = [];
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
     val = varargin{k+1};
@@ -55,6 +56,8 @@ for k = 1:2:numel(varargin)
             periodicY = logical(val);
         case 'computediagnostics'
             computeDiagnostics = logical(val);
+        case {'cellwetmask','wetmask','fluidmask'}
+            cellWetMask = logical(val);
         otherwise
             error('Unknown option: %s', string(key));
     end
@@ -62,19 +65,25 @@ end
 
 stateOut = ensure_memory_fields(state, Nx, Ny);
 activeBefore = resamp_active_mask(stateOut);
+if isempty(cellWetMask)
+    [cellWetMask, wetInfo] = resamp_cell_wet_mask(stateOut, params, 'mode', 'auto');
+else
+    [cellWetMask, wetInfo] = resamp_cell_wet_mask(stateOut, params, 'mode', 'explicit', 'cellWetMask', cellWetMask);
+end
+wetVec = reshape(cellWetMask.', [Nc, 1]);
 if ~isfield(stateOut, 'active') || isempty(stateOut.active)
     error('state must be converted to a particle pool with resamp_enable_particle_pool before insertion.');
 end
 
 Gbefore = resamp_deposit_weighted_to_grid(stateOut.x, stateOut.v, stateOut.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', eps, 'activeMask', activeBefore);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', eps, 'activeMask', activeBefore, 'cellWetMask', cellWetMask);
 Nvec = reshape(Gbefore.N.', [Nc, 1]);
 UxVec = reshape(Gbefore.Ux.', [Nc, 1]);
 UyVec = reshape(Gbefore.Uy.', [Nc, 1]);
 validVec = reshape(Gbefore.valid.', [Nc, 1]);
 
 % Update memory from reliable cells before inserting new support.
-reliable = Nvec >= memoryMinParticles & validVec;
+reliable = wetVec & Nvec >= memoryMinParticles & validVec;
 if any(reliable)
     uMemUxVec = reshape(stateOut.uMemUx.', [Nc, 1]);
     uMemUyVec = reshape(stateOut.uMemUy.', [Nc, 1]);
@@ -91,8 +100,8 @@ uMemUxVec = reshape(stateOut.uMemUx.', [Nc, 1]);
 uMemUyVec = reshape(stateOut.uMemUy.', [Nc, 1]);
 uMemValidVec = reshape(stateOut.uMemValid.', [Nc, 1]);
 
-poorCells = find(Nvec < NMin);
-overCells = find(Nvec > NMax);
+poorCells = find(wetVec & Nvec < NMin);
+overCells = find(wetVec & Nvec > NMax);
 freeSlots = find(~activeBefore);
 freePtr = 1;
 insertedPerCell = zeros(Nc, 1);
@@ -164,7 +173,7 @@ activeAfter = resamp_active_mask(stateOut);
 stateOut.Nactive = nnz(activeAfter);
 stateOut.Ncapacity = size(stateOut.x, 1);
 Gafter = resamp_deposit_weighted_to_grid(stateOut.x, stateOut.v, stateOut.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', eps, 'activeMask', activeAfter);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', eps, 'activeMask', activeAfter, 'cellWetMask', cellWetMask);
 Nafter = reshape(Gafter.N.', [Nc, 1]);
 
 diag = struct();
@@ -175,9 +184,11 @@ diag.NMax = NMax;
 diag.memoryMinParticles = memoryMinParticles;
 diag.insertVelocityMode = insertVelocityMode;
 diag.nCells = Nc;
+diag.nWetCells = wetInfo.nWetCells;
+diag.nDryCells = wetInfo.nDryCells;
 diag.nPoorCellsBefore = numel(poorCells);
 diag.nOverCellsBefore = numel(overCells);
-diag.nEmptyCellsBefore = nnz(Nvec == 0);
+diag.nEmptyCellsBefore = nnz(wetVec & Nvec == 0);
 diag.nInsertedParticles = sum(insertedPerCell);
 diag.nCellsInserted = nnz(insertedPerCell > 0);
 diag.capacityHit = capacityHit;
@@ -186,12 +197,16 @@ diag.NactiveAfter = nnz(activeAfter);
 diag.Ncapacity = size(stateOut.x, 1);
 diag.NfreeBefore = nnz(~activeBefore);
 diag.NfreeAfter = nnz(~activeAfter);
-diag.nPoorCellsAfter = nnz(Nafter < NMin);
-diag.nEmptyCellsAfter = nnz(Nafter == 0);
-diag.nOverCellsAfter = nnz(Nafter > NMax);
-diag.NMinAfter = min(Nafter);
-diag.NMaxAfter = max(Nafter);
-diag.NStdAfter = std(double(Nafter), 0, 'omitnan');
+diag.nPoorCellsAfter = nnz(wetVec & Nafter < NMin);
+diag.nEmptyCellsAfter = nnz(wetVec & Nafter == 0);
+diag.nOverCellsAfter = nnz(wetVec & Nafter > NMax);
+if any(wetVec)
+    diag.NMinAfter = min(Nafter(wetVec));
+    diag.NMaxAfter = max(Nafter(wetVec));
+    diag.NStdAfter = std(double(Nafter(wetVec)), 0, 'omitnan');
+else
+    diag.NMinAfter = NaN; diag.NMaxAfter = NaN; diag.NStdAfter = NaN;
+end
 diag.nMemoryReliableUpdated = nnz(reliable);
 diag.nMemoryValid = nnz(stateOut.uMemValid);
 diag.insertedPerCellGrid = [];

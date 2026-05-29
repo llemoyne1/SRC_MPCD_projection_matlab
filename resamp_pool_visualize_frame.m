@@ -51,11 +51,16 @@ Mtarget = getf(params, 'resampTargetCellMass', gamma * m0);
 Nmin = getf(params, 'resampNMin', ceil(0.5 * gamma));
 Nmax = getf(params, 'resampNMax', ceil(1.5 * gamma));
 
+wetMask = G.cellWetMask;
 Nrel = double(G.N) / max(gamma, eps) - 1.0;
 Mrel = double(G.M) / max(Mtarget, eps) - 1.0;
+Nrel(~wetMask) = NaN;
+Mrel(~wetMask) = NaN;
 speed = sqrt(G.Ux.^2 + G.Uy.^2);
+speed(~wetMask) = NaN;
 omega = periodic_vorticity(G.Ux, G.Uy, dx, dy);
-[classMap, classLabels] = population_class_map(G.N, Nmin, Nmax, opts.insertDiag);
+omega(~wetMask) = NaN;
+[classMap, classLabels] = population_class_map(G.N, Nmin, Nmax, opts.insertDiag, wetMask);
 
 fig = figure(opts.figureId); %#ok<NASGU>
 clf;
@@ -65,7 +70,7 @@ if isempty(method)
     method = 'resamp';
 end
 sgtitle(sprintf(['%s step %d, t=%.4g %s | Nact=%d/%d free=%d extractNow=%s extCum=%s extLast=%s ', ...
-                 'insertNow=%s insCum=%s insLast=%s | N[min,max]=[%g,%g] MrelRMS=%.2e mRelStd=%.2e ', ...
+                 'insertNow=%s insCum=%s insLast=%s | wet=%d/%d N[min,max]=[%g,%g] MrelRMS=%.2e mRelStd=%.2e ', ...
                  'safeCells=%s safeShift=%.2e kBT=%.3g thermAfter=%.3g'], ...
     char(string(method)), step, step * getf(params,'dt',0), opts.titleSuffix, ...
     md.NpActive, md.Ncapacity, md.Nfree, ...
@@ -75,7 +80,7 @@ sgtitle(sprintf(['%s step %d, t=%.4g %s | Nact=%d/%d free=%d extractNow=%s extCu
     format_scalar(getf(opts.insertDiag,'nInsertedParticles',NaN)), ...
     format_scalar(getf(opts.insertDiag,'nInsertedParticlesCumulative',NaN)), ...
     format_scalar(getf(opts.insertDiag,'lastInsertionStep',NaN)), ...
-    md.NMin, md.NMax, md.MRelRms, md.mParticleRelStd, ...
+    getf(md,'nWetCells',params.Nx*params.Ny), params.Nx*params.Ny, md.NMin, md.NMax, md.MRelRms, md.mParticleRelStd, ...
     format_scalar(getf(opts.remapDiag,'nCellsMassSafetyApplied',NaN)), ...
     getf(opts.remapDiag,'massSafetyVelocityShiftRms',NaN), md.kBTWeighted, ...
     getf(getf(opts.stepDiag,'thermostatAfterRemap',struct()), 'meanKBTAfter', NaN)));
@@ -110,9 +115,9 @@ set_symmetric_clim(gca, omega, getf(params,'visualOmegaCLim',NaN));
 
 subplot(2,3,6);
 imagesc(xc, yc, classMap'); axis xy equal tight;
-caxis([-2 2]);
+caxis([-3 2]);
 cbClass = colorbar;
-set(cbClass, 'Ticks', -2:2, 'TickLabels', {'empty','poor','ok','over','insert'});
+set(cbClass, 'Ticks', -3:2, 'TickLabels', {'dry','empty','poor','ok','over','insert'});
 title(sprintf('population class: %s', classLabels)); xlabel('x'); ylabel('y');
 
 info = struct();
@@ -120,6 +125,7 @@ info.G = G;
 info.massDiagnostics = md;
 info.omega = omega;
 info.classMap = classMap;
+info.cellWetMask = wetMask;
 info.Nrel = Nrel;
 info.Mrel = Mrel;
 info.speed = speed;
@@ -228,19 +234,23 @@ omega = dUyDx - dUxDy;
 omega(~isfinite(omega)) = 0;
 end
 
-function [classMap, label] = population_class_map(N, Nmin, Nmax, insertDiag)
-% Codes: -2 empty, -1 poor, 0 nominal, +1 over, +2 inserted this step.
+function [classMap, label] = population_class_map(N, Nmin, Nmax, insertDiag, wetMask)
+% Codes: -3 dry, -2 empty, -1 poor, 0 nominal, +1 over, +2 inserted this step.
+if nargin < 5 || isempty(wetMask)
+    wetMask = true(size(N));
+end
 classMap = zeros(size(N));
-classMap(N == 0) = -2;
-classMap(N > 0 & N < Nmin) = -1;
-classMap(N > Nmax) = 1;
+classMap(~wetMask) = -3;
+classMap(wetMask & N == 0) = -2;
+classMap(wetMask & N > 0 & N < Nmin) = -1;
+classMap(wetMask & N > Nmax) = 1;
 if isstruct(insertDiag) && isfield(insertDiag, 'insertedPerCellGrid') && ~isempty(insertDiag.insertedPerCellGrid)
     ins = insertDiag.insertedPerCellGrid;
     if isequal(size(ins), size(N))
-        classMap(ins > 0) = 2;
+        classMap(wetMask & ins > 0) = 2;
     end
 end
-label = '-2 empty, -1 poor, 0 ok, 1 over, 2 inserted';
+label = '-3 dry, -2 empty, -1 poor, 0 ok, 1 over, 2 inserted';
 end
 
 function plot_debug_figure(state, active, params, G, md, opts, step, xc, yc, classMap) %#ok<INUSD>
@@ -302,8 +312,8 @@ end
 grid on; xlabel('m_p / m_0'); ylabel('count'); title('active particle mass histogram');
 
 subplot(2,3,6);
-bar([md.NpActive, md.Nfree, md.Ncapacity, nnz(G.N(:) < ceil(0.5*gamma)), nnz(G.N(:) > ceil(1.5*gamma))]);
-set(gca, 'XTickLabel', {'active','free','cap','poor','over'});
+bar([md.NpActive, md.Nfree, md.Ncapacity, getf(md,'nWetCells',numel(G.N)), getf(md,'nDryCells',0), nnz(G.cellWetMask(:) & G.N(:) < ceil(0.5*gamma)), nnz(G.cellWetMask(:) & G.N(:) > ceil(1.5*gamma))]);
+set(gca, 'XTickLabel', {'active','free','cap','wet','dry','poor','over'});
 grid on; title('pool/population counters'); ylabel('count');
 
 drawnow;

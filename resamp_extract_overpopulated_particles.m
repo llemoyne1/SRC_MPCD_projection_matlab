@@ -35,6 +35,7 @@ periodicX = true;
 periodicY = true;
 computeDiagnostics = true;
 minMass = eps;
+cellWetMask = [];
 
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
@@ -54,6 +55,8 @@ for k = 1:2:numel(varargin)
             periodicY = logical(val);
         case {'minmass','minm'}
             minMass = val;
+        case {'cellwetmask','wetmask','fluidmask'}
+            cellWetMask = logical(val);
         case 'computediagnostics'
             computeDiagnostics = logical(val);
         otherwise
@@ -73,15 +76,21 @@ if ~isfield(stateOut, 'active') || isempty(stateOut.active)
     error('state must be converted to a particle pool with resamp_enable_particle_pool before extraction.');
 end
 activeBefore = resamp_active_mask(stateOut);
+if isempty(cellWetMask)
+    [cellWetMask, wetInfo] = resamp_cell_wet_mask(stateOut, params, 'mode', 'auto');
+else
+    [cellWetMask, wetInfo] = resamp_cell_wet_mask(stateOut, params, 'mode', 'explicit', 'cellWetMask', cellWetMask);
+end
+wetVec = reshape(cellWetMask.', [Nc, 1]);
 Gbefore = resamp_deposit_weighted_to_grid(stateOut.x, stateOut.v, stateOut.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeBefore);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeBefore, 'cellWetMask', cellWetMask);
 cellId = Gbefore.cellId;
 Nvec = reshape(Gbefore.N.', [Nc, 1]);
 UxVec = reshape(Gbefore.Ux.', [Nc, 1]);
 UyVec = reshape(Gbefore.Uy.', [Nc, 1]);
 
-overCells = find(Nvec > NMax);
-poorCells = find(Nvec < NMin);
+overCells = find(wetVec & Nvec > NMax);
+poorCells = find(wetVec & Nvec < NMin);
 extractedPerCell = zeros(Nc, 1);
 extractedIds = [];
 
@@ -116,7 +125,7 @@ stateOut.Nactive = nnz(activeAfter);
 stateOut.Ncapacity = size(stateOut.x, 1);
 
 Gafter = resamp_deposit_weighted_to_grid(stateOut.x, stateOut.v, stateOut.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeAfter);
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', minMass, 'activeMask', activeAfter, 'cellWetMask', cellWetMask);
 Nafter = reshape(Gafter.N.', [Nc, 1]);
 
 diag = struct();
@@ -126,9 +135,11 @@ diag.NMin = NMin;
 diag.NMax = NMax;
 diag.selectionMode = selectionMode;
 diag.nCells = Nc;
+diag.nWetCells = wetInfo.nWetCells;
+diag.nDryCells = wetInfo.nDryCells;
 diag.nOverCellsBefore = numel(overCells);
 diag.nPoorCellsBefore = numel(poorCells);
-diag.nEmptyCellsBefore = nnz(Nvec == 0);
+diag.nEmptyCellsBefore = nnz(wetVec & Nvec == 0);
 diag.nExtractedParticles = sum(extractedPerCell);
 diag.nCellsExtracted = nnz(extractedPerCell > 0);
 diag.NactiveBefore = nnz(activeBefore);
@@ -136,12 +147,16 @@ diag.NactiveAfter = nnz(activeAfter);
 diag.Ncapacity = size(stateOut.x, 1);
 diag.NfreeBefore = nnz(~activeBefore);
 diag.NfreeAfter = nnz(~activeAfter);
-diag.nPoorCellsAfter = nnz(Nafter < NMin);
-diag.nEmptyCellsAfter = nnz(Nafter == 0);
-diag.nOverCellsAfter = nnz(Nafter > NMax);
-diag.NMinAfter = min(Nafter);
-diag.NMaxAfter = max(Nafter);
-diag.NStdAfter = std(double(Nafter), 0, 'omitnan');
+diag.nPoorCellsAfter = nnz(wetVec & Nafter < NMin);
+diag.nEmptyCellsAfter = nnz(wetVec & Nafter == 0);
+diag.nOverCellsAfter = nnz(wetVec & Nafter > NMax);
+if any(wetVec)
+    diag.NMinAfter = min(Nafter(wetVec));
+    diag.NMaxAfter = max(Nafter(wetVec));
+    diag.NStdAfter = std(double(Nafter(wetVec)), 0, 'omitnan');
+else
+    diag.NMinAfter = NaN; diag.NMaxAfter = NaN; diag.NStdAfter = NaN;
+end
 diag.extractedPerCellGrid = [];
 diag.extractedIds = [];
 diag.Gbefore = [];

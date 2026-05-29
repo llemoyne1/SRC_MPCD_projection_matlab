@@ -4,6 +4,7 @@ function diag = resamp_population_mass_diagnostics(state, params, varargin)
 validate_state(state);
 periodicX = true;
 periodicY = true;
+cellWetMask = [];
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
     val = varargin{k+1};
@@ -12,16 +13,31 @@ for k = 1:2:numel(varargin)
             periodicX = logical(val);
         case "periodicy"
             periodicY = logical(val);
+        case {"cellwetmask", "wetmask", "fluidmask"}
+            cellWetMask = logical(val);
         otherwise
             error('Unknown option: %s', string(key));
     end
 end
 
 activeMask = resamp_active_mask(state);
+if isempty(cellWetMask)
+    [cellWetMask, wetInfo] = resamp_cell_wet_mask(state, params, 'mode', 'auto');
+else
+    [cellWetMask, wetInfo] = resamp_cell_wet_mask(state, params, 'mode', 'explicit', 'cellWetMask', cellWetMask);
+end
 G = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
-    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', eps, 'activeMask', activeMask);
-N = double(G.N(:));
-M = double(G.M(:));
+    'periodicX', periodicX, 'periodicY', periodicY, 'minMass', eps, 'activeMask', activeMask, ...
+    'cellWetMask', cellWetMask);
+Nall = double(G.N(:));
+Mall = double(G.M(:));
+wetVec = cellWetMask(:);
+N = Nall(wetVec);
+M = Mall(wetVec);
+if isempty(N)
+    N = zeros(0,1);
+    M = zeros(0,1);
+end
 m = state.m(activeMask);
 v = state.v(activeMask, :);
 
@@ -66,6 +82,9 @@ diag.activeFraction = pool.activeFraction;
 diag.Nx = params.Nx;
 diag.Ny = params.Ny;
 diag.NCells = params.Nx * params.Ny;
+diag.nWetCells = wetInfo.nWetCells;
+diag.nDryCells = wetInfo.nDryCells;
+diag.wetFraction = wetInfo.wetFraction;
 diag.totalMass = Mtot;
 diag.totalMomentum = Ptot;
 diag.globalVelocityWeighted = Uglobal;
@@ -74,19 +93,35 @@ diag.meanVyWeighted = Uglobal(2);
 diag.kBTWeighted = kBTWeighted;
 diag.kineticEnergyMeanWeighted = kineticMeanWeighted;
 
-diag.NMean = mean(N, 'omitnan');
-diag.NStd = std(N, 0, 'omitnan');
-diag.NMin = min(N);
-diag.NMax = max(N);
-diag.nEmptyCells = nnz(N == 0);
-diag.NOutBandFraction = mean(abs(N - gamma) > 0.2 * max(gamma, eps), 'omitnan');
-
-diag.MMean = mean(M, 'omitnan');
-diag.MStd = std(M, 0, 'omitnan');
-diag.MMin = min(M);
-diag.MMax = max(M);
-diag.MRelRms = sqrt(mean((massErr ./ max(nominalCellMass, eps)).^2, 'omitnan'));
-diag.MOutBandFraction = mean(abs(M - nominalCellMass) > 0.2 * max(nominalCellMass, eps), 'omitnan');
+diag.NMeanAllCells = mean(Nall, 'omitnan');
+diag.NStdAllCells = std(Nall, 0, 'omitnan');
+diag.NMinAllCells = min(Nall);
+diag.NMaxAllCells = max(Nall);
+diag.nEmptyCellsAllCells = nnz(Nall == 0);
+if isempty(N)
+    diag.NMean = NaN; diag.NStd = NaN; diag.NMin = NaN; diag.NMax = NaN;
+    diag.nEmptyCells = NaN; diag.NOutBandFraction = NaN;
+    diag.MMean = NaN; diag.MStd = NaN; diag.MMin = NaN; diag.MMax = NaN;
+    diag.MRelRms = NaN; diag.MOutBandFraction = NaN;
+else
+    diag.NMean = mean(N, 'omitnan');
+    diag.NStd = std(N, 0, 'omitnan');
+    diag.NMin = min(N);
+    diag.NMax = max(N);
+    diag.nEmptyCells = nnz(N == 0);
+    diag.NOutBandFraction = mean(abs(N - gamma) > 0.2 * max(gamma, eps), 'omitnan');
+    diag.MMean = mean(M, 'omitnan');
+    diag.MStd = std(M, 0, 'omitnan');
+    diag.MMin = min(M);
+    diag.MMax = max(M);
+    diag.MRelRms = sqrt(mean((massErr ./ max(nominalCellMass, eps)).^2, 'omitnan'));
+    diag.MOutBandFraction = mean(abs(M - nominalCellMass) > 0.2 * max(nominalCellMass, eps), 'omitnan');
+end
+diag.MMeanAllCells = mean(Mall, 'omitnan');
+diag.MStdAllCells = std(Mall, 0, 'omitnan');
+diag.MMinAllCells = min(Mall);
+diag.MMaxAllCells = max(Mall);
+diag.cellWetMask = cellWetMask;
 
 if isempty(m)
     diag.mParticleMean = NaN;

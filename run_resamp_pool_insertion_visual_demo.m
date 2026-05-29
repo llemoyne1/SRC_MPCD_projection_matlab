@@ -280,6 +280,11 @@ params.taylorGreenModeY = 1;
 params.taylorGreenThermalNoise = true;
 params.taylorGreenForcingEnable = opts.taylorGreenForcingEnable;
 params.taylorGreenForcingAmplitude = opts.taylorGreenForcingAmplitude;
+% Compatibility with projection_apply_taylor_green_forcing, inherited from
+% the integrated Q6/Q9 suite, which uses the shorter "Force" spelling.
+params.taylorGreenForceEnable = opts.taylorGreenForcingEnable;
+params.taylorGreenForceAmplitude = opts.taylorGreenForcingAmplitude;
+params.taylorGreenForceZeroMeanKick = true;
 params.bodyForceX = 0;
 params.bodyForceY = 0;
 params.useRandomGridShift = true;

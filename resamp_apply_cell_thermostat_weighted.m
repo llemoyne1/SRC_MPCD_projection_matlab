@@ -12,6 +12,7 @@ minParticles = get_param(params, 'thermostatMinParticlesPerCell', 2);
 maxScale = get_param(params, 'thermostatMaxScale', 10.0);
 minKBT = get_param(params, 'thermostatMinKBT', 1e-14);
 activeMask = true(size(v,1), 1);
+cellWetMask = [];
 for k = 1:2:numel(varargin)
     key = lower(string(varargin{k}));
     val = varargin{k+1};
@@ -30,6 +31,12 @@ for k = 1:2:numel(varargin)
             maxScale = val;
         case {"activemask", "active"}
             activeMask = logical(val(:));
+        case {"cellwetmask", "wetmask", "fluidmask", "activecellmask"}
+            if isempty(val)
+                cellWetMask = [];
+            else
+                cellWetMask = logical(val);
+            end
         otherwise
             error('Unknown option: %s', string(key));
     end
@@ -46,12 +53,29 @@ if targetKBT <= 0 || strength <= 0 || ~any(activeMask)
     return;
 end
 
-xA = x(activeMask,:);
-vA = v(activeMask,:);
-mA = m(activeMask);
+activeIndex = find(activeMask);
+xA = x(activeIndex,:);
+vA = v(activeIndex,:);
+mA = m(activeIndex);
 ids = resamp_cell_ids_periodic(xA, params, 'periodicX', periodicX, 'periodicY', periodicY);
+if ~isempty(cellWetMask)
+    if ~isequal(size(cellWetMask), [params.Nx, params.Ny])
+        error('cellWetMask must have size Nx-by-Ny = [%d %d].', params.Nx, params.Ny);
+    end
+    wetFlat = reshape(logical(cellWetMask).', [], 1);
+    wetP = wetFlat(ids);
+    xA = xA(wetP,:);
+    vA = vA(wetP,:);
+    mA = mA(wetP);
+    ids = ids(wetP);
+    activeIndex = activeIndex(wetP);
+end
 Nc = params.Nx * params.Ny;
 NpA = size(vA, 1);
+if NpA == 0
+    info = empty_info();
+    return;
+end
 
 nCell = accumarray(ids, 1, [Nc 1], @sum, 0);
 M = accumarray(ids, mA, [Nc 1], @sum, 0);
@@ -92,7 +116,7 @@ if any(validP)
     vAOut(validP,1) = UxP(validP) + sP(validP) .* relx(validP);
     vAOut(validP,2) = UyP(validP) + sP(validP) .* rely(validP);
 end
-vOut(activeMask,:) = vAOut;
+vOut(activeIndex,:) = vAOut;
 
 kBTAfter = nan(Nc,1);
 kBTAfter(valid) = (scales(valid).^2) .* kBTBefore(valid);

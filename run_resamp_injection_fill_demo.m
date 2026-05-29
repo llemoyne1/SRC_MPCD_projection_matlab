@@ -18,6 +18,7 @@ if ~exist(opts.outputDir, 'dir'), mkdir(opts.outputDir); end
 if opts.saveFrames && ~exist(opts.frameDir, 'dir'), mkdir(opts.frameDir); end
 
 % Build a full latent marker grid: gamma storage slots per cell, but no fluid.
+
 [state, initInfo] = resamp_initialize_particles_taylor_green_forced(params);
 [state, poolInfo0] = resamp_enable_particle_pool(state, 'capacityFactor', opts.capacityFactor);
 state = make_all_slots_latent(state);
@@ -331,9 +332,14 @@ if isempty(opts.injectionCell)
 else
     cx = opts.injectionCell(1); cy = opts.injectionCell(2);
 end
-sx = opts.injectionPatchSize(1); sy = opts.injectionPatchSize(2);
-ixList = mod((cx-floor(sx/2)):(cx-floor(sx/2)+sx-1)-1, Nx)+1;
-iyList = mod((cy-floor(sy/2)):(cy-floor(sy/2)+sy-1)-1, Ny)+1;
+sx = max(1, round(opts.injectionPatchSize(1))); sy = max(1, round(opts.injectionPatchSize(2)));
+% Build exactly sx-by-sy periodic cell lists.  The previous expression
+% placed the final '-1' on the colon upper bound and returned an empty list
+% for sx=1/sy=1, which silently disabled injection.
+ix0 = cx - floor((sx - 1) / 2);
+iy0 = cy - floor((sy - 1) / 2);
+ixList = mod((ix0:(ix0 + sx - 1)) - 1, Nx) + 1;
+iyList = mod((iy0:(iy0 + sy - 1)) - 1, Ny) + 1;
 [IX,IY]=ndgrid(ixList,iyList);
 ids=(IX(:)-1)*Ny+IY(:);
 ids=unique(ids(:),'stable');
@@ -359,6 +365,7 @@ end
 
 function [md,tg]=diagnostics(state,params)
 md=resamp_population_mass_diagnostics(state,params,'periodicX',true,'periodicY',true,'cellWetMask',state.cellWetMask);
+md.dt = params.dt;
 if exist('projection_taylor_green_diagnostics','file')==2
     tg=projection_taylor_green_diagnostics(md.G,params);
 else
@@ -369,7 +376,7 @@ end
 function row = make_row(step, md, tg, injectDiag, extractDiag, insertDiag, remapDiag, therm)
 roleCounts = get_role_count(md.G, 'none'); %#ok<NASGU>
 row=empty_row();
-row.step=step; row.t=step*0; %#ok<NASGU>
+row.step=step; row.t=step * get_field(md, 'dt', NaN);
 row.NpActive=md.NpActive; row.Ncapacity=md.Ncapacity; row.Nfree=md.Nfree;
 row.nWetCells=md.nWetCells; row.nDryCells=md.nDryCells; row.wetFraction=md.wetFraction;
 row.NMin=md.NMin; row.NMax=md.NMax; row.NStd=md.NStd; row.MRelRms=md.MRelRms;

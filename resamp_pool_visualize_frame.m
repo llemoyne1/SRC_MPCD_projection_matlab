@@ -10,6 +10,7 @@ function info = resamp_pool_visualize_frame(state, params, step, varargin)
 %
 % Optional name-value arguments:
 %   'insertDiag'         insertion diagnostic struct from resamp_insert_...
+%   'extractDiag'        extraction diagnostic struct from resamp_extract_...
 %   'remapDiag'          remap diagnostic struct
 %   'stepDiag'           SRC/Q6 diagnostic struct
 %   'summary'            optional row/struct/table with scalar diagnostics
@@ -63,10 +64,13 @@ method = getf(params, 'method', '');
 if isempty(method)
     method = 'resamp';
 end
-sgtitle(sprintf(['%s step %d, t=%.4g %s | Nact=%d/%d free=%d insertedNow=%s cum=%s last=%s ', ...
-                 '| N[min,max]=[%g,%g] MrelRMS=%.2e mRelStd=%.2e kBT=%.3g thermAfter=%.3g'], ...
+sgtitle(sprintf(['%s step %d, t=%.4g %s | Nact=%d/%d free=%d extractNow=%s extCum=%s extLast=%s ', ...
+                 'insertNow=%s insCum=%s insLast=%s | N[min,max]=[%g,%g] MrelRMS=%.2e mRelStd=%.2e kBT=%.3g thermAfter=%.3g'], ...
     char(string(method)), step, step * getf(params,'dt',0), opts.titleSuffix, ...
     md.NpActive, md.Ncapacity, md.Nfree, ...
+    format_scalar(getf(opts.extractDiag,'nExtractedParticles',NaN)), ...
+    format_scalar(getf(opts.extractDiag,'nExtractedParticlesCumulative',NaN)), ...
+    format_scalar(getf(opts.extractDiag,'lastExtractionStep',NaN)), ...
     format_scalar(getf(opts.insertDiag,'nInsertedParticles',NaN)), ...
     format_scalar(getf(opts.insertDiag,'nInsertedParticlesCumulative',NaN)), ...
     format_scalar(getf(opts.insertDiag,'lastInsertionStep',NaN)), ...
@@ -140,6 +144,7 @@ end
 function opts = parse_options(params, varargin)
 opts = struct();
 opts.insertDiag = struct();
+opts.extractDiag = struct();
 opts.remapDiag = struct();
 opts.stepDiag = struct();
 opts.summary = struct();
@@ -161,6 +166,8 @@ for k = 1:2:numel(varargin)
     switch key
         case "insertdiag"
             opts.insertDiag = val;
+        case "extractdiag"
+            opts.extractDiag = val;
         case "remapdiag"
             opts.remapDiag = val;
         case "stepdiag"
@@ -245,6 +252,12 @@ if isstruct(opts.insertDiag) && isfield(opts.insertDiag, 'insertedPerCellGrid') 
         insertGrid = opts.insertDiag.insertedPerCellGrid;
     end
 end
+extractGrid = zeros(Nx, Ny);
+if isstruct(opts.extractDiag) && isfield(opts.extractDiag, 'extractedPerCellGrid') && ~isempty(opts.extractDiag.extractedPerCellGrid)
+    if isequal(size(opts.extractDiag.extractedPerCellGrid), [Nx, Ny])
+        extractGrid = opts.extractDiag.extractedPerCellGrid;
+    end
+end
 if isfield(state, 'uMemUx') && isequal(size(state.uMemUx), [Nx, Ny])
     memDiff = sqrt((G.Ux - state.uMemUx).^2 + (G.Uy - state.uMemUy).^2);
     if isfield(state, 'uMemValid') && isequal(size(state.uMemValid), [Nx, Ny])
@@ -269,8 +282,8 @@ imagesc(xc, yc, relStdMassGrid'); axis xy equal tight; colorbar;
 title('relative std(m_p) per cell'); xlabel('x'); ylabel('y');
 
 subplot(2,3,3);
-imagesc(xc, yc, insertGrid'); axis xy equal tight; colorbar;
-title('particles inserted at current step'); xlabel('x'); ylabel('y');
+imagesc(xc, yc, (insertGrid - extractGrid)'); axis xy equal tight; colorbar;
+title('current population edit: +insert / -extract'); xlabel('x'); ylabel('y');
 
 subplot(2,3,4);
 imagesc(xc, yc, memDiff'); axis xy equal tight; colorbar;

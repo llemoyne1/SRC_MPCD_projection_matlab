@@ -1,10 +1,13 @@
-function out = run_resamp_pool_insertion_visual_demo(varargin)
-%RUN_RESAMP_POOL_INSERTION_VISUAL_DEMO Live visual demo for weighted pool insertion.
+function out = run_resamp_periodic_step_visual_demo(varargin)
+%RUN_RESAMP_PERIODIC_STEP_VISUAL_DEMO Periodic step/shear visual demo for weighted resampling.
 %
-% Examples:
-%   out = run_resamp_pool_insertion_visual_demo('method','weighted_q6');
-%   out = run_resamp_pool_insertion_visual_demo('method','weighted_classic','initialDepletion','patch');
-%   out = run_resamp_pool_insertion_visual_demo('showDebugFigure',true,'saveFrames',true);
+% This run is the first dynamic stress case after the depleted-patch smoke.
+% It is fully periodic: no wall, no solid mask, no inlet/outlet.  A staircase
+% velocity field creates strong shear and local population transport while the
+% weighted pool/remap machinery maintains mass and support.
+%
+% Example:
+%   out = run_resamp_periodic_step_visual_demo('method','weighted_q6');
 
 opts = parse_options(varargin{:});
 if ~isempty(opts.rngSeed)
@@ -14,13 +17,12 @@ end
 params = default_params(opts);
 params.method = opts.method;
 params.visualFigureId = opts.figureId;
-params.visualFigureName = sprintf('resamp pool %s', opts.method);
 params.visualMaxParticles = opts.visualMaxParticles;
+params.visualQuiverScale = opts.visualQuiverScale;
 
-[state, initInfo] = resamp_initialize_particles_taylor_green_forced(params);
+[state, initInfo] = resamp_initialize_particles_periodic_step(params);
 [state, poolInfo0] = resamp_enable_particle_pool(state, 'capacityFactor', opts.capacityFactor);
 state = initialize_velocity_memory(state, params);
-state = apply_initial_depletion(state, params, opts);
 
 if ~exist(opts.outputDir, 'dir')
     mkdir(opts.outputDir);
@@ -33,30 +35,23 @@ nRows = floor(opts.steps / opts.summaryEvery) + 2;
 rows = repmat(empty_row(), nRows, 1);
 irow = 1;
 insertStats = empty_insert_stats();
-extractStats = empty_extract_stats();
 thermostatAfterRemapDiag = empty_thermostat_after_remap_diag();
 insertDiag0 = attach_insert_cumulative(empty_insert_diag(), insertStats);
-extractDiag0 = attach_extract_cumulative(empty_extract_diag(), extractStats);
 stepDiag0 = attach_thermostat_after_remap(empty_step_diag(), thermostatAfterRemapDiag);
-[md, tg] = diagnostics(state, params);
-rows(irow) = make_row(0, 0.0, md, tg, stepDiag0, insertDiag0, extractDiag0, empty_remap_diag());
+[md, stepMetrics] = diagnostics(state, params);
+rows(irow) = make_row(0, 0.0, md, stepMetrics, stepDiag0, insertDiag0, empty_remap_diag());
 
-resamp_pool_visualize_frame(state, params, 0, ...
+resamp_periodic_step_visualize_frame(state, params, 0, ...
     'insertDiag', insertDiag0, ...
-    'extractDiag', extractDiag0, ...
     'remapDiag', empty_remap_diag(), ...
     'stepDiag', stepDiag0, ...
     'figureId', opts.figureId, ...
-    'showDebugFigure', opts.showDebugFigure, ...
-    'debugFigureId', opts.debugFigureId, ...
     'saveFrame', opts.saveFrames, ...
     'frameDir', opts.frameDir, ...
-    'framePrefix', opts.framePrefix, ...
-    'titleSuffix', opts.initialDepletion);
+    'framePrefix', opts.framePrefix);
 
 lastStepDiag = stepDiag0;
 lastInsertDiag = insertDiag0;
-lastExtractDiag = extractDiag0;
 lastRemapDiag = empty_remap_diag();
 lastThermostatAfterRemapDiag = thermostatAfterRemapDiag;
 
@@ -64,31 +59,19 @@ for step = 1:opts.steps
     switch opts.method
         case 'weighted_classic'
             [state, stepDiag] = resamp_step_classic_periodic_weighted(state, params);
+            [state, forceDiag] = apply_periodic_step_forcing(state, params, opts);
+            stepDiag.kolmogorovForce = forceDiag;
         case 'weighted_q6'
-            [state, stepDiag] = resamp_step_projection_periodic_weighted(state, params);
+            % Split the Q6 step here so that the structured body force is applied
+            % after SRC streaming/collision and before the incompressible projection.
+            [stateClassic, classicDiag] = resamp_step_classic_periodic_weighted(state, params);
+            [stateForced, forceDiag] = apply_periodic_step_forcing(stateClassic, params, opts);
+            [state, stepDiag] = resamp_apply_q6_periodic_weighted(stateForced, params);
+            stepDiag.classic = classicDiag;
+            stepDiag.kolmogorovForce = forceDiag;
         otherwise
             error('Unknown method: %s', opts.method);
     end
-    preEditG = [];
-    if opts.preservePreEditVelocity && opts.remapEvery > 0 && mod(step, opts.remapEvery) == 0
-        activePreEdit = resamp_active_mask(state);
-        preEditG = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
-            'periodicX', true, 'periodicY', true, 'activeMask', activePreEdit);
-    end
-
-    if opts.extractEvery > 0 && mod(step, opts.extractEvery) == 0
-        [state, extractDiag] = resamp_extract_overpopulated_particles(state, params, ...
-            'NTarget', opts.NTarget, ...
-            'NMin', opts.NMin, ...
-            'NMax', opts.NMax, ...
-            'extractSelectionMode', opts.extractSelectionMode, ...
-            'computeDiagnostics', true);
-    else
-        extractDiag = empty_extract_diag();
-    end
-    extractStats = update_extract_stats(extractStats, extractDiag, step);
-    extractDiag = attach_extract_cumulative(extractDiag, extractStats);
-    lastExtractDiag = extractDiag;
 
     if opts.insertEvery > 0 && mod(step, opts.insertEvery) == 0
         [state, insertDiag] = resamp_insert_underpopulated_particles(state, params, ...
@@ -108,31 +91,14 @@ for step = 1:opts.steps
     lastInsertDiag = insertDiag;
 
     if opts.remapEvery > 0 && mod(step, opts.remapEvery) == 0
-        remapTargetVelocityMode = opts.targetVelocityMode;
-        remapArgs = {'targetCellMass', params.resampTargetCellMass, ...
+        [state, remapDiag] = resamp_local_mass_moment_remap(state, params, ...
+            'targetCellMass', params.resampTargetCellMass, ...
+            'targetVelocityMode', opts.targetVelocityMode, ...
             'method', opts.remapMethod, ...
             'massMin', opts.massMinFactor * params.resampParticleMass, ...
             'massMax', opts.massMaxFactor * params.resampParticleMass, ...
             'constraintTolerance', opts.constraintTolerance, ...
-            'computeDiagnostics', true};
-        didPopulationEdit = get_field(extractDiag, 'nExtractedParticles', 0) > 0 || ...
-            get_field(insertDiag, 'nInsertedParticles', 0) > 0;
-        if opts.preservePreEditVelocity && didPopulationEdit
-            if isempty(preEditG)
-                activePreEdit = resamp_active_mask(state);
-                preEditG = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
-                    'periodicX', true, 'periodicY', true, 'activeMask', activePreEdit);
-            end
-            remapTargetVelocityMode = 'grid';
-            remapArgs = [remapArgs, {'targetVelocityMode', remapTargetVelocityMode, ...
-                'targetUx', preEditG.Ux, 'targetUy', preEditG.Uy}]; %#ok<AGROW>
-        else
-            remapArgs = [remapArgs, {'targetVelocityMode', remapTargetVelocityMode}]; %#ok<AGROW>
-        end
-        [state, remapDiag] = resamp_local_mass_moment_remap(state, params, remapArgs{:});
-        remapDiag.populationEditDidModifyParticles = didPopulationEdit;
-        remapDiag.populationEditPreservePreEditVelocity = opts.preservePreEditVelocity;
-        remapDiag.populationEditTargetVelocityMode = remapTargetVelocityMode;
+            'computeDiagnostics', true);
     else
         remapDiag = empty_remap_diag();
     end
@@ -154,43 +120,36 @@ for step = 1:opts.steps
     doVisual = (opts.visualEvery > 0 && mod(step, opts.visualEvery) == 0) || step == opts.steps;
     doSummary = (opts.summaryEvery > 0 && mod(step, opts.summaryEvery) == 0) || step == opts.steps;
     if doSummary || doVisual
-        [md, tg] = diagnostics(state, params);
+        [md, stepMetrics] = diagnostics(state, params);
     end
-
     if doSummary
         irow = irow + 1;
-        rows(irow) = make_row(step, step * params.dt, md, tg, stepDiag, insertDiag, extractDiag, remapDiag);
-        fprintf(['visual resamp %-12s step=%6d t=%.4g Nact=%7d free=%7d ', ...
+        rows(irow) = make_row(step, step * params.dt, md, stepMetrics, stepDiag, insertDiag, remapDiag);
+        fprintf(['periodic-step %-12s step=%6d t=%.4g Nact=%7d free=%7d ', ...
                  'N[min,max]=[%3g,%3g] Mrel=%.3e insertedNow=%s insertedCum=%s lastInsert=%s ', ...
-                 'poor=%4g over=%4g mRelStd=%.3e kBT=%.5g thermAfter=%.5g\n'], ...
+                 'poor=%4g over=%4g mRelStd=%.3e kBT=%.5g thermAfter=%.5g omegaRms=%.4g\n'], ...
             opts.method, step, step*params.dt, md.NpActive, md.Nfree, md.NMin, md.NMax, md.MRelRms, ...
             format_scalar(get_field(insertDiag, 'nInsertedParticles', NaN)), ...
             format_scalar(get_field(insertDiag, 'nInsertedParticlesCumulative', NaN)), ...
             format_scalar(get_field(insertDiag, 'lastInsertionStep', NaN)), ...
             get_field(insertDiag, 'nPoorCellsAfter', NaN), ...
             get_field(insertDiag, 'nOverCellsAfter', NaN), md.mParticleRelStd, md.kBTWeighted, ...
-            get_nested(stepDiag, {'thermostatAfterRemap','meanKBTAfter'}, NaN));
+            get_nested(stepDiag, {'thermostatAfterRemap','meanKBTAfter'}, NaN), stepMetrics.omegaRms);
     end
-
     if doVisual
-        resamp_pool_visualize_frame(state, params, step, ...
+        resamp_periodic_step_visualize_frame(state, params, step, ...
             'insertDiag', insertDiag, ...
-            'extractDiag', extractDiag, ...
             'remapDiag', remapDiag, ...
             'stepDiag', stepDiag, ...
             'figureId', opts.figureId, ...
-            'showDebugFigure', opts.showDebugFigure, ...
-            'debugFigureId', opts.debugFigureId, ...
             'saveFrame', opts.saveFrames, ...
             'frameDir', opts.frameDir, ...
-            'framePrefix', opts.framePrefix, ...
-            'titleSuffix', opts.initialDepletion);
+            'framePrefix', opts.framePrefix);
     end
 end
 
 rows = rows(1:irow);
 summary = struct2table(rows);
-
 out = struct();
 out.params = params;
 out.options = opts;
@@ -199,18 +158,16 @@ out.initialPoolInfo = poolInfo0;
 out.state = state;
 out.summary = summary;
 out.finalMassDiagnostics = md;
-out.finalTaylorGreenDiagnostics = tg;
+out.finalStepMetrics = stepMetrics;
 out.finalPoolInfo = resamp_particle_pool_info(state);
 out.lastStepDiag = lastStepDiag;
 out.lastInsertDiag = lastInsertDiag;
-out.lastExtractDiag = lastExtractDiag;
 out.lastRemapDiag = lastRemapDiag;
 out.lastThermostatAfterRemapDiag = lastThermostatAfterRemapDiag;
 out.insertStats = insertStats;
-out.extractStats = extractStats;
 
 if opts.writeCsv
-    csvPath = fullfile(opts.outputDir, sprintf('resamp_pool_insertion_visual_%s_%s.csv', opts.method, opts.initialDepletion));
+    csvPath = fullfile(opts.outputDir, sprintf('resamp_periodic_step_visual_%s.csv', opts.method));
     writetable(summary, csvPath);
     out.csvPath = csvPath;
     fprintf('Wrote %s\n', csvPath);
@@ -229,15 +186,6 @@ params.alphaDeg = opts.alphaDeg;
 params.kBT = opts.kBT;
 params.initialPopulationMode = 'exact_per_cell';
 params.initialVelocityZeroGlobalMean = true;
-params.taylorGreenAmplitude = opts.taylorGreenAmplitude;
-params.taylorGreenInitialAmplitude = opts.taylorGreenInitialAmplitude;
-params.taylorGreenModeX = 1;
-params.taylorGreenModeY = 1;
-params.taylorGreenThermalNoise = true;
-params.taylorGreenForcingEnable = opts.taylorGreenForcingEnable;
-params.taylorGreenForcingAmplitude = opts.taylorGreenForcingAmplitude;
-params.bodyForceX = 0;
-params.bodyForceY = 0;
 params.useRandomGridShift = true;
 params.projectionEnable = true;
 params.projectionStrength = opts.projectionStrength;
@@ -251,55 +199,81 @@ params.thermostatTargetKBT = opts.thermostatTargetKBT;
 params.thermostatStrength = opts.thermostatStrength;
 params.thermostatMinParticlesPerCell = 2;
 params.thermostatMaxScale = 10;
+params.bodyForceX = 0;
+params.bodyForceY = 0;
+params.forceMode = opts.forceMode;
+params.kolmogorovForceAmplitude = opts.kolmogorovForceAmplitude;
+params.kolmogorovForceWaveNumber = opts.kolmogorovForceWaveNumber;
+params.kolmogorovForcePhase = opts.kolmogorovForcePhase;
+params.kolmogorovForceDirection = opts.kolmogorovForceDirection;
+params.kolmogorovForceZeroMeanKick = opts.kolmogorovForceZeroMeanKick;
+params.kolmogorovForceApplyDt = opts.kolmogorovForceApplyDt;
 params.resampParticleMass = opts.particleMass;
 params.resampTargetCellMass = opts.gamma * opts.particleMass;
 params.resampNTarget = opts.NTarget;
 params.resampNMin = opts.NMin;
 params.resampNMax = opts.NMax;
 params.resampMemoryMinParticles = opts.memoryMinParticles;
-params.resampExtractEvery = opts.extractEvery;
-params.resampExtractSelectionMode = opts.extractSelectionMode;
-params.resampPreservePreEditVelocity = opts.preservePreEditVelocity;
 params.computeDiagnostics = true;
 params.visualMaxParticles = opts.visualMaxParticles;
 params.visualQuiverScale = opts.visualQuiverScale;
+params.periodicStepULower = opts.ULower;
+params.periodicStepUUpper = opts.UUpper;
+params.periodicStepVLower = opts.VLower;
+params.periodicStepVUpper = opts.VUpper;
+params.periodicStepXFraction = opts.stepXFraction;
+params.periodicStepYLowFraction = opts.stepYLowFraction;
+params.periodicStepYHighFraction = opts.stepYHighFraction;
+params.periodicStepTransitionWidth = opts.stepTransitionWidth;
+params.periodicStepThermalNoise = opts.stepThermalNoise;
+params.periodicStepSubtractMeanVelocity = opts.stepSubtractMeanVelocity;
 end
 
 function opts = parse_options(varargin)
 opts = struct();
 opts.method = 'weighted_q6';
-opts.steps = 300;
+opts.steps = 1000;
 opts.summaryEvery = 25;
-opts.visualEvery = 5;
-opts.Nx = 32;
+opts.visualEvery = 10;
+opts.Nx = 64;
 opts.Ny = 32;
 opts.gamma = 20;
-opts.dt = 0.001;
+opts.dt = 0.01;
 opts.alphaDeg = 90;
 opts.kBT = 0.01;
 opts.particleMass = 1.0;
-opts.taylorGreenAmplitude = 0.10;
-opts.taylorGreenInitialAmplitude = 0.10;
-opts.taylorGreenForcingEnable = false;
-opts.taylorGreenForcingAmplitude = 0.0;
+opts.ULower = 0.20;
+opts.UUpper = -0.05;
+opts.VLower = 0.00;
+opts.VUpper = 0.00;
+opts.stepXFraction = 0.35;
+opts.stepYLowFraction = 0.35;
+opts.stepYHighFraction = 0.65;
+opts.stepTransitionWidth = 0.0;
+opts.stepThermalNoise = true;
+opts.stepSubtractMeanVelocity = true;
 opts.projectionStrength = 1.0;
 opts.projectionInterpolationMethod = 'nearest';
 opts.thermostatAfterStep = false;
 opts.thermostatAfterProjection = false;
-opts.thermostatAfterRemap = false;
+opts.thermostatAfterRemap = true;
 opts.thermostatTargetKBT = [];
-opts.thermostatStrength = 1.0;
+opts.thermostatStrength = 0.25;
+opts.forceMode = 'none';
+opts.kolmogorovForceAmplitude = 0.0;
+opts.kolmogorovForceWaveNumber = 1;
+opts.kolmogorovForcePhase = 0.0;
+opts.kolmogorovForceDirection = 'x';
+opts.kolmogorovForceZeroMeanKick = true;
+opts.kolmogorovForceApplyDt = true;
 opts.rngSeed = 12345;
 opts.writeCsv = true;
-opts.outputDir = fullfile('runs', 'resamp_pool_insertion_visual');
+opts.outputDir = fullfile('runs', 'resamp_periodic_step_visual');
 opts.capacityFactor = 2.0;
 opts.NTarget = [];
 opts.NMin = [];
 opts.NMax = [];
 opts.memoryMinParticles = [];
-opts.extractEvery = 0;
-opts.extractSelectionMode = 'closest_to_cell_mean';
-opts.preservePreEditVelocity = true;
 opts.insertEvery = 1;
 opts.insertVelocityMode = 'current_or_memory_pairwise';
 opts.insertKBT = [];
@@ -309,18 +283,12 @@ opts.targetVelocityMode = 'preserve_cell_velocity';
 opts.massMinFactor = 0.05;
 opts.massMaxFactor = 20.0;
 opts.constraintTolerance = 1e-10;
-opts.initialDepletion = 'patch';
-opts.depletionPatchSize = [6 6];
-opts.depletionPatchCenter = [];
-opts.figureId = 620;
-opts.debugFigureId = 621;
-opts.showDebugFigure = false;
+opts.figureId = 640;
 opts.saveFrames = false;
-opts.frameDir = fullfile('runs', 'resamp_pool_insertion_visual', 'frames');
-opts.framePrefix = 'resamp_pool';
-opts.visualMaxParticles = 12000;
+opts.frameDir = fullfile('runs', 'resamp_periodic_step_visual', 'frames');
+opts.framePrefix = 'resamp_periodic_step';
+opts.visualMaxParticles = 15000;
 opts.visualQuiverScale = 1.2;
-
 if mod(numel(varargin), 2) ~= 0
     error('Options must be name/value pairs.');
 end
@@ -350,14 +318,26 @@ for k = 1:2:numel(varargin)
             opts.kBT = val;
         case {'particlemass','resampparticlemass'}
             opts.particleMass = val;
-        case 'taylorgreenamplitude'
-            opts.taylorGreenAmplitude = val;
-        case 'taylorgreeninitialamplitude'
-            opts.taylorGreenInitialAmplitude = val;
-        case 'taylorgreenforcingenable'
-            opts.taylorGreenForcingEnable = logical(val);
-        case 'taylorgreenforcingamplitude'
-            opts.taylorGreenForcingAmplitude = val;
+        case {'ulower','periodicstepulower'}
+            opts.ULower = val;
+        case {'uupper','periodicstepuupper'}
+            opts.UUpper = val;
+        case {'vlower','periodicstepvlower'}
+            opts.VLower = val;
+        case {'vupper','periodicstepvupper'}
+            opts.VUpper = val;
+        case {'stepxfraction','periodicstepxfraction'}
+            opts.stepXFraction = val;
+        case {'stepylowfraction','periodicstepylowfraction'}
+            opts.stepYLowFraction = val;
+        case {'stepyhighfraction','periodicstepyhighfraction'}
+            opts.stepYHighFraction = val;
+        case {'steptransitionwidth','periodicsteptransitionwidth'}
+            opts.stepTransitionWidth = val;
+        case {'stepthermalnoise','periodicstepthermalnoise'}
+            opts.stepThermalNoise = logical(val);
+        case {'stepsubtractmeanvelocity','periodicstepsubtractmeanvelocity'}
+            opts.stepSubtractMeanVelocity = logical(val);
         case 'projectionstrength'
             opts.projectionStrength = val;
         case 'projectioninterpolationmethod'
@@ -372,6 +352,20 @@ for k = 1:2:numel(varargin)
             opts.thermostatTargetKBT = val;
         case 'thermostatstrength'
             opts.thermostatStrength = val;
+        case {'forcemode','bodyforcemode'}
+            opts.forceMode = lower(strrep(char(string(val)), '-', '_'));
+        case {'kolmogorovforceamplitude','forceamplitude','bodyforceamplitude','kolmogorovamplitude'}
+            opts.kolmogorovForceAmplitude = val;
+        case {'kolmogorovforcewavenumber','kolmogorovwavenumber','forcemodenumber','kolmogorovk'}
+            opts.kolmogorovForceWaveNumber = val;
+        case {'kolmogorovforcephase','kolmogorovphase','forcephase'}
+            opts.kolmogorovForcePhase = val;
+        case {'kolmogorovforcedirection','forcedirection'}
+            opts.kolmogorovForceDirection = lower(char(string(val)));
+        case {'kolmogorovforcezeromeankick','forcemeanmomentumcorrection','zeromeanforcekick'}
+            opts.kolmogorovForceZeroMeanKick = logical(val);
+        case {'kolmogorovforceapplydt','forceapplydt'}
+            opts.kolmogorovForceApplyDt = logical(val);
         case 'rngseed'
             opts.rngSeed = val;
         case 'writecsv'
@@ -388,12 +382,6 @@ for k = 1:2:numel(varargin)
             opts.NMax = val;
         case 'memoryminparticles'
             opts.memoryMinParticles = val;
-        case 'extractevery'
-            opts.extractEvery = val;
-        case {'extractselectionmode','selectionmode'}
-            opts.extractSelectionMode = lower(char(string(val)));
-        case {'preservepreeditvelocity','populationeditpreservepreeditvelocity'}
-            opts.preservePreEditVelocity = logical(val);
         case 'insertevery'
             opts.insertEvery = val;
         case 'insertvelocitymode'
@@ -412,18 +400,8 @@ for k = 1:2:numel(varargin)
             opts.massMaxFactor = val;
         case 'constrainttolerance'
             opts.constraintTolerance = val;
-        case 'initialdepletion'
-            opts.initialDepletion = lower(char(string(val)));
-        case 'depletionpatchsize'
-            opts.depletionPatchSize = val;
-        case 'depletionpatchcenter'
-            opts.depletionPatchCenter = val;
         case 'figureid'
             opts.figureId = val;
-        case 'debugfigureid'
-            opts.debugFigureId = val;
-        case 'showdebugfigure'
-            opts.showDebugFigure = logical(val);
         case {'saveframes','saveframe'}
             opts.saveFrames = logical(val);
         case 'framedir'
@@ -458,13 +436,58 @@ if isempty(opts.thermostatTargetKBT)
 end
 end
 
-function [md, tg] = diagnostics(state, params)
-md = resamp_population_mass_diagnostics(state, params, 'periodicX', true, 'periodicY', true);
-if exist('projection_taylor_green_diagnostics', 'file') == 2
-    tg = projection_taylor_green_diagnostics(md.G, params);
-else
-    tg = struct('modeAmplitude', NaN, 'modeCoherence', NaN, 'enstrophy', NaN);
+function [stateOut, forceDiag] = apply_periodic_step_forcing(state, params, opts)
+mode = lower(strrep(char(string(opts.forceMode)), '-', '_'));
+stateOut = state;
+switch mode
+    case {'none','off','disabled','no',''}
+        forceDiag = empty_force_diag(mode);
+    case {'kolmogorov','kolmogorov_x','kolmogorov_body_force','bodyforce_kolmogorov'}
+        [stateOut, forceDiag] = resamp_apply_kolmogorov_body_force(stateOut, params, ...
+            'amplitude', opts.kolmogorovForceAmplitude, ...
+            'waveNumber', opts.kolmogorovForceWaveNumber, ...
+            'phase', opts.kolmogorovForcePhase, ...
+            'direction', opts.kolmogorovForceDirection, ...
+            'zeroMeanKick', opts.kolmogorovForceZeroMeanKick, ...
+            'applyDt', opts.kolmogorovForceApplyDt);
+    otherwise
+        error('Unknown ForceMode: %s', opts.forceMode);
 end
+end
+
+function d = empty_force_diag(mode)
+if nargin < 1 || isempty(mode)
+    mode = 'none';
+end
+d = struct();
+d.enabled = false;
+d.mode = char(string(mode));
+d.amplitude = 0;
+d.waveNumber = NaN;
+d.phase = NaN;
+d.direction = '';
+d.zeroMeanKick = false;
+d.applyDt = true;
+d.nActive = 0;
+d.kickRms = 0;
+d.kickMax = 0;
+d.meanKick = [0 0];
+d.momentumBefore = [NaN NaN];
+d.momentumAfter = [NaN NaN];
+d.momentumDelta = [0 0];
+d.momentumDeltaNorm = 0;
+end
+
+function [md, metrics] = diagnostics(state, params)
+md = resamp_population_mass_diagnostics(state, params, 'periodicX', true, 'periodicY', true);
+G = md.G;
+omega = periodic_vorticity(G.Ux, G.Uy, G.dx, G.dy);
+metrics = struct();
+metrics.omegaRms = sqrt(mean(omega(:).^2, 'omitnan'));
+metrics.speedRms = sqrt(mean(G.Ux(:).^2 + G.Uy(:).^2, 'omitnan'));
+metrics.meanUx = mean(G.Ux(:), 'omitnan');
+metrics.meanUy = mean(G.Uy(:), 'omitnan');
+metrics.omega = omega;
 end
 
 function state = initialize_velocity_memory(state, params)
@@ -474,45 +497,6 @@ G = resamp_deposit_weighted_to_grid(state.x, state.v, state.m, params, ...
 state.uMemUx = G.Ux;
 state.uMemUy = G.Uy;
 state.uMemValid = G.N > 0;
-end
-
-function state = apply_initial_depletion(state, params, opts)
-mode = lower(char(string(opts.initialDepletion)));
-if strcmp(mode, 'none') || strcmp(mode, 'off')
-    return;
-end
-if ~strcmp(mode, 'patch')
-    error('Unknown initialDepletion mode: %s', mode);
-end
-Nx = params.Nx;
-Ny = params.Ny;
-if isempty(opts.depletionPatchCenter)
-    cx = floor(Nx/2);
-    cy = floor(Ny/2);
-else
-    cx = opts.depletionPatchCenter(1);
-    cy = opts.depletionPatchCenter(2);
-end
-sx = opts.depletionPatchSize(1);
-sy = opts.depletionPatchSize(2);
-ixList = mod((cx - floor(sx/2)):(cx - floor(sx/2) + sx - 1) - 1, Nx) + 1;
-iyList = mod((cy - floor(sy/2)):(cy - floor(sy/2) + sy - 1) - 1, Ny) + 1;
-activeMask = resamp_active_mask(state);
-cellId = resamp_cell_ids_periodic(state.x(activeMask,:), params, 'periodicX', true, 'periodicY', true);
-activeIds = find(activeMask);
-kill = false(size(activeIds));
-for k = 1:numel(activeIds)
-    c = cellId(k);
-    ix = floor((c - 1) / Ny) + 1;
-    iy = c - Ny * (ix - 1);
-    kill(k) = any(ixList == ix) && any(iyList == iy);
-end
-idsKill = activeIds(kill);
-state.active(idsKill) = false;
-state.m(idsKill) = 0;
-state.v(idsKill,:) = 0;
-state.x(idsKill,:) = 0;
-state.Nactive = nnz(resamp_active_mask(state));
 end
 
 function row = empty_row()
@@ -540,20 +524,23 @@ row.totalMass = NaN;
 row.totalMomentumX = NaN;
 row.totalMomentumY = NaN;
 row.kBTWeighted = NaN;
-row.tgAmplitude = NaN;
+row.speedRms = NaN;
+row.omegaRms = NaN;
+row.meanUx = NaN;
+row.meanUy = NaN;
+row.forceEnabled = NaN;
+row.forceMode = "";
+row.kolmogorovForceAmplitude = NaN;
+row.kolmogorovForceWaveNumber = NaN;
+row.kolmogorovKickRms = NaN;
+row.kolmogorovKickMax = NaN;
+row.kolmogorovMomentumDeltaNorm = NaN;
+row.kolmogorovMeanKickX = NaN;
+row.kolmogorovMeanKickY = NaN;
 row.rmsDivParticleAfter = NaN;
 row.dvAppliedRms = NaN;
 row.weightedMomentumCorrectionResidual = NaN;
 row.collisionDeltaPNorm = NaN;
-row.extractedParticles = NaN;
-row.extractCells = NaN;
-row.poorCellsAfterExtract = NaN;
-row.emptyCellsAfterExtract = NaN;
-row.overCellsAfterExtract = NaN;
-row.extractedParticlesCumulative = NaN;
-row.extractCellsCumulative = NaN;
-row.maxExtractedParticlesPerStep = NaN;
-row.lastExtractionStep = NaN;
 row.insertedParticles = NaN;
 row.insertCells = NaN;
 row.poorCellsAfterInsert = NaN;
@@ -574,7 +561,7 @@ row.remapMomentumResidualRms = NaN;
 row.remapSuccessFractionNonEmpty = NaN;
 end
 
-function row = make_row(step, t, md, tg, stepDiag, insertDiag, extractDiag, remapDiag)
+function row = make_row(step, t, md, metrics, stepDiag, insertDiag, remapDiag)
 row = empty_row();
 row.step = step;
 row.t = t;
@@ -599,20 +586,27 @@ row.totalMass = md.totalMass;
 row.totalMomentumX = md.totalMomentum(1);
 row.totalMomentumY = md.totalMomentum(2);
 row.kBTWeighted = md.kBTWeighted;
-row.tgAmplitude = get_field(tg, 'modeAmplitude', NaN);
+row.speedRms = metrics.speedRms;
+row.omegaRms = metrics.omegaRms;
+row.meanUx = metrics.meanUx;
+row.meanUy = metrics.meanUy;
+forceDiag = get_nested(stepDiag, {'kolmogorovForce'}, struct());
+row.forceEnabled = double(get_field(forceDiag, 'enabled', false));
+row.forceMode = string(get_field(forceDiag, 'mode', 'none'));
+row.kolmogorovForceAmplitude = get_field(forceDiag, 'amplitude', NaN);
+row.kolmogorovForceWaveNumber = get_field(forceDiag, 'waveNumber', NaN);
+row.kolmogorovKickRms = get_field(forceDiag, 'kickRms', NaN);
+row.kolmogorovKickMax = get_field(forceDiag, 'kickMax', NaN);
+row.kolmogorovMomentumDeltaNorm = get_field(forceDiag, 'momentumDeltaNorm', NaN);
+meanKick = get_field(forceDiag, 'meanKick', [NaN NaN]);
+if numel(meanKick) >= 2
+    row.kolmogorovMeanKickX = meanKick(1);
+    row.kolmogorovMeanKickY = meanKick(2);
+end
 row.rmsDivParticleAfter = get_nested(stepDiag, {'rmsDivParticleAfter'}, NaN);
 row.dvAppliedRms = get_nested(stepDiag, {'dvAppliedRms'}, NaN);
 row.weightedMomentumCorrectionResidual = get_nested(stepDiag, {'momentumCorrection','residualDeltaPNorm'}, NaN);
 row.collisionDeltaPNorm = get_nested(stepDiag, {'classic','collisionDeltaPNorm'}, get_nested(stepDiag, {'collisionDeltaPNorm'}, NaN));
-row.extractedParticles = get_field(extractDiag, 'nExtractedParticles', NaN);
-row.extractCells = get_field(extractDiag, 'nCellsExtracted', NaN);
-row.poorCellsAfterExtract = get_field(extractDiag, 'nPoorCellsAfter', NaN);
-row.emptyCellsAfterExtract = get_field(extractDiag, 'nEmptyCellsAfter', NaN);
-row.overCellsAfterExtract = get_field(extractDiag, 'nOverCellsAfter', NaN);
-row.extractedParticlesCumulative = get_field(extractDiag, 'nExtractedParticlesCumulative', NaN);
-row.extractCellsCumulative = get_field(extractDiag, 'nExtractedCellsCumulative', NaN);
-row.maxExtractedParticlesPerStep = get_field(extractDiag, 'maxExtractedParticlesPerStep', NaN);
-row.lastExtractionStep = get_field(extractDiag, 'lastExtractionStep', NaN);
 row.insertedParticles = get_field(insertDiag, 'nInsertedParticles', NaN);
 row.insertCells = get_field(insertDiag, 'nCellsInserted', NaN);
 row.poorCellsAfterInsert = get_field(insertDiag, 'nPoorCellsAfter', NaN);
@@ -644,17 +638,9 @@ d = struct('nInsertedParticles', NaN, 'nCellsInserted', NaN, 'nPoorCellsAfter', 
     'maxInsertedParticlesPerStep', NaN, 'lastInsertionStep', NaN);
 end
 
-function d = empty_extract_diag()
-d = struct('nExtractedParticles', NaN, 'nCellsExtracted', NaN, 'nPoorCellsAfter', NaN, ...
-    'nEmptyCellsAfter', NaN, 'nOverCellsAfter', NaN, 'extractedPerCellGrid', [], ...
-    'nExtractedParticlesCumulative', NaN, 'nExtractedCellsCumulative', NaN, ...
-    'maxExtractedParticlesPerStep', NaN, 'lastExtractionStep', NaN);
-end
-
 function d = empty_remap_diag()
 d = struct('massResidualRelRms', NaN, 'momentumResidualRms', NaN, 'successFractionNonEmpty', NaN);
 end
-
 
 function stats = empty_insert_stats()
 stats = struct();
@@ -667,12 +653,8 @@ end
 function stats = update_insert_stats(stats, insertDiag, step)
 nNow = get_field(insertDiag, 'nInsertedParticles', 0);
 cNow = get_field(insertDiag, 'nCellsInserted', 0);
-if ~isfinite(nNow)
-    nNow = 0;
-end
-if ~isfinite(cNow)
-    cNow = 0;
-end
+if ~isfinite(nNow), nNow = 0; end
+if ~isfinite(cNow), cNow = 0; end
 stats.nInsertedParticlesCumulative = stats.nInsertedParticlesCumulative + nNow;
 stats.nInsertedCellsCumulative = stats.nInsertedCellsCumulative + cNow;
 stats.maxInsertedParticlesPerStep = max(stats.maxInsertedParticlesPerStep, nNow);
@@ -688,38 +670,6 @@ d.maxInsertedParticlesPerStep = stats.maxInsertedParticlesPerStep;
 d.lastInsertionStep = stats.lastInsertionStep;
 end
 
-function stats = empty_extract_stats()
-stats = struct();
-stats.nExtractedParticlesCumulative = 0;
-stats.nExtractedCellsCumulative = 0;
-stats.maxExtractedParticlesPerStep = 0;
-stats.lastExtractionStep = NaN;
-end
-
-function stats = update_extract_stats(stats, extractDiag, step)
-nNow = get_field(extractDiag, 'nExtractedParticles', 0);
-cNow = get_field(extractDiag, 'nCellsExtracted', 0);
-if ~isfinite(nNow)
-    nNow = 0;
-end
-if ~isfinite(cNow)
-    cNow = 0;
-end
-stats.nExtractedParticlesCumulative = stats.nExtractedParticlesCumulative + nNow;
-stats.nExtractedCellsCumulative = stats.nExtractedCellsCumulative + cNow;
-stats.maxExtractedParticlesPerStep = max(stats.maxExtractedParticlesPerStep, nNow);
-if nNow > 0
-    stats.lastExtractionStep = step;
-end
-end
-
-function d = attach_extract_cumulative(d, stats)
-d.nExtractedParticlesCumulative = stats.nExtractedParticlesCumulative;
-d.nExtractedCellsCumulative = stats.nExtractedCellsCumulative;
-d.maxExtractedParticlesPerStep = stats.maxExtractedParticlesPerStep;
-d.lastExtractionStep = stats.lastExtractionStep;
-end
-
 function info = empty_thermostat_after_remap_diag()
 info = struct('enabled', false, 'targetKBT', NaN, 'strength', NaN, ...
     'minParticlesPerCell', NaN, 'maxScale', NaN, 'nThermostattedCells', 0, ...
@@ -729,6 +679,12 @@ end
 
 function d = attach_thermostat_after_remap(d, thermostatInfo)
 d.thermostatAfterRemap = thermostatInfo;
+end
+
+function omega = periodic_vorticity(Ux, Uy, dx, dy)
+dUyDx = (circshift(Uy, [-1,0]) - circshift(Uy, [1,0])) / (2*dx);
+dUxDy = (circshift(Ux, [0,-1]) - circshift(Ux, [0,1])) / (2*dy);
+omega = dUyDx - dUxDy;
 end
 
 function s = format_scalar(v)

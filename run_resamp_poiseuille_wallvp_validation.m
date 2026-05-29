@@ -35,6 +35,7 @@ allCases(1).remapEvery = 0;
 allCases(1).thermostatAfterStep = true;
 allCases(1).thermostatAfterRemap = false;
 allCases(1).massSafetyEnable = false;
+allCases(1).massRegularizationEnable = false;
 allCases(1).NMin = 0;
 allCases(1).NMax = 2 * opts.NTarget;
 
@@ -47,6 +48,7 @@ allCases(2).remapEvery = 1;
 allCases(2).thermostatAfterStep = false;
 allCases(2).thermostatAfterRemap = true;
 allCases(2).massSafetyEnable = true;
+allCases(2).massRegularizationEnable = opts.massRegularizationEnable;
 allCases(2).NMin = opts.NMin;
 allCases(2).NMax = opts.NMax;
 
@@ -103,11 +105,12 @@ sampleTimes = nan(nSamples,1); sampleSteps = nan(nSamples,1);
 rows = repmat(empty_timeseries_row(), floor(opts.steps / opts.summaryEvery) + 2, 1);
 irow = 0; isamp = 0;
 insertStats = empty_counter_stats(); extractStats = empty_counter_stats();
-lastStepDiag = struct(); lastInsert = empty_insert_diag(); lastExtract = empty_extract_diag(); lastRemap = empty_remap_diag(); lastThermostat = empty_thermostat_diag();
+lastStepDiag = struct(); lastInsert = empty_insert_diag(); lastExtract = empty_extract_diag(); lastRemap = empty_remap_diag(); lastThermostat = empty_thermostat_diag(); lastMassReg = empty_mass_regularization_diag();
+massRegStats = empty_counter_stats();
 
 [prof, md] = sample_state(state, params);
 isamp = isamp + 1; sampleSteps(isamp)=0; sampleTimes(isamp)=0; UxProfiles(:,isamp)=prof.Ux; UyProfiles(:,isamp)=prof.Uy; NProfiles(:,isamp)=prof.N; MProfiles(:,isamp)=prof.M;
-irow = irow + 1; rows(irow) = make_timeseries_row(0, 0, md, prof, struct(), lastInsert, lastExtract, lastRemap, lastThermostat);
+irow = irow + 1; rows(irow) = make_timeseries_row(0, 0, md, prof, struct(), lastInsert, lastExtract, lastRemap, lastThermostat, lastMassReg);
 if opts.visualEvery > 0
     visualize_case_frame(state, params, prof, md, c, opts, 0, 0, struct(), false);
 end
@@ -178,13 +181,32 @@ for step = 1:opts.steps
         lastThermostat = empty_thermostat_diag();
     end
 
+    if c.massRegularizationEnable && should_apply_mass_regularization(step, opts)
+        [state, lastMassReg] = resamp_regularize_particle_masses_preserve_mue(state, params, ...
+            'periodicX', true, 'periodicY', false, 'activeMask', resamp_active_mask(state), 'cellWetMask', state.cellWetMask, ...
+            'strength', opts.massRegularizationStrength, ...
+            'triggerMode', opts.massRegularizationTriggerMode, ...
+            'relStdTrigger', opts.massRegularizationRelStdTrigger, ...
+            'minFactor', opts.massRegularizationMinFactor, ...
+            'maxFactor', opts.massRegularizationMaxFactor, ...
+            'preserveEnergy', opts.massRegularizationPreserveEnergy, ...
+            'nominalParticleMass', opts.particleMass, ...
+            'minParticlesPerCell', opts.massRegularizationMinParticlesPerCell, ...
+            'tolerance', opts.constraintTolerance);
+        lastMassReg.step = step;
+        massRegStats = update_counter_stats(massRegStats, get_field(lastMassReg,'nParticlesRegularized',0), get_field(lastMassReg,'nCellsRegularized',0), step);
+        lastMassReg = attach_mass_regularization_cumulative(lastMassReg, massRegStats);
+    else
+        lastMassReg = attach_mass_regularization_cumulative(empty_mass_regularization_diag(), massRegStats);
+    end
+
     if mod(step, opts.sampleEvery) == 0
         [prof, md] = sample_state(state, params);
         isamp = isamp + 1; sampleSteps(isamp)=step; sampleTimes(isamp)=step*opts.dt; UxProfiles(:,isamp)=prof.Ux; UyProfiles(:,isamp)=prof.Uy; NProfiles(:,isamp)=prof.N; MProfiles(:,isamp)=prof.M;
     end
     if mod(step, opts.summaryEvery) == 0 || step == opts.steps
         [prof, md] = sample_state(state, params);
-        irow = irow + 1; rows(irow) = make_timeseries_row(step, step*opts.dt, md, prof, lastStepDiag, lastInsert, lastExtract, lastRemap, lastThermostat);
+        irow = irow + 1; rows(irow) = make_timeseries_row(step, step*opts.dt, md, prof, lastStepDiag, lastInsert, lastExtract, lastRemap, lastThermostat, lastMassReg);
         fprintf('[%s] step=%d/%d N=[%g,%g] Mrel=%.3g kBT=%.4g wallVP=%.0f center-wall=%.4g\n', ...
             c.label, step, opts.steps, md.NMin, md.NMax, md.MRelRms, md.kBTWeighted, get_field(stepDiag,'nVirtualWallParticlesEquivalent',NaN), prof.centerMinusWall);
     end
@@ -257,17 +279,30 @@ prof = resamp_poiseuille_profile_diagnostics(state, params);
 md = resamp_population_mass_diagnostics(state, params, 'periodicX', true, 'periodicY', false, 'cellWetMask', state.cellWetMask);
 end
 
-function row = make_timeseries_row(step,t,md,prof,stepDiag,insertDiag,extractDiag,remapDiag,thermostatDiag)
-row = empty_timeseries_row(); row.step=step; row.t=t; row.NpActive=md.NpActive; row.Nfree=md.Nfree; row.NMin=md.NMin; row.NMax=md.NMax; row.NStd=md.NStd; row.MRelRms=md.MRelRms; row.mParticleRelStd=md.mParticleRelStd; row.mParticleMin=md.mParticleMin; row.mParticleMax=md.mParticleMax; row.kBTWeighted=md.kBTWeighted; row.meanVxWeighted=md.meanVxWeighted; row.centerMinusWall=prof.centerMinusWall; row.centerVelocity=prof.centerVelocity; row.wallMeanVelocity=prof.wallMeanVelocity; row.insertedParticles=get_field(insertDiag,'nInsertedParticles',NaN); row.insertedParticlesCumulative=get_field(insertDiag,'nInsertedParticlesCumulative',NaN); row.extractedParticles=get_field(extractDiag,'nExtractedParticles',NaN); row.extractedParticlesCumulative=get_field(extractDiag,'nExtractedParticlesCumulative',NaN); row.remapMassResidualRelRms=get_field(remapDiag,'massResidualRelRms',NaN); row.remapMomentumResidualRms=get_field(remapDiag,'momentumResidualRms',NaN); row.remapMassSafetyCells=get_field(remapDiag,'nCellsMassSafetyApplied',NaN); row.thermostatKBTAfter=get_field(thermostatDiag,'meanKBTAfter',NaN); row.rmsDivBefore=get_field(stepDiag,'rmsDivBefore',NaN); row.rmsDivAfter=get_field(stepDiag,'rmsDivParticleAfter',NaN); row.nVirtualWallCells=get_field(stepDiag,'nVirtualWallCells',get_field(get_field(stepDiag,'classic',struct()),'nVirtualWallCells',NaN)); row.nVirtualWallParticlesEquivalent=get_field(stepDiag,'nVirtualWallParticlesEquivalent',get_field(get_field(stepDiag,'classic',struct()),'nVirtualWallParticlesEquivalent',NaN)); row.virtualWallMassTotal=get_field(stepDiag,'virtualWallMassTotal',get_field(get_field(stepDiag,'classic',struct()),'virtualWallMassTotal',NaN));
+function row = make_timeseries_row(step,t,md,prof,stepDiag,insertDiag,extractDiag,remapDiag,thermostatDiag,massRegDiag)
+row = empty_timeseries_row(); row.step=step; row.t=t; row.NpActive=md.NpActive; row.Nfree=md.Nfree; row.NMin=md.NMin; row.NMax=md.NMax; row.NStd=md.NStd; row.MRelRms=md.MRelRms; row.mParticleRelStd=md.mParticleRelStd; row.mParticleMin=md.mParticleMin; row.mParticleMax=md.mParticleMax; row.kBTWeighted=md.kBTWeighted; row.meanVxWeighted=md.meanVxWeighted; row.centerMinusWall=prof.centerMinusWall; row.centerVelocity=prof.centerVelocity; row.wallMeanVelocity=prof.wallMeanVelocity; row.insertedParticles=get_field(insertDiag,'nInsertedParticles',NaN); row.insertedParticlesCumulative=get_field(insertDiag,'nInsertedParticlesCumulative',NaN); row.extractedParticles=get_field(extractDiag,'nExtractedParticles',NaN); row.extractedParticlesCumulative=get_field(extractDiag,'nExtractedParticlesCumulative',NaN); row.remapMassResidualRelRms=get_field(remapDiag,'massResidualRelRms',NaN); row.remapMomentumResidualRms=get_field(remapDiag,'momentumResidualRms',NaN); row.remapMassSafetyCells=get_field(remapDiag,'nCellsMassSafetyApplied',NaN); row.thermostatKBTAfter=get_field(thermostatDiag,'meanKBTAfter',NaN); row.rmsDivBefore=get_field(stepDiag,'rmsDivBefore',NaN); row.rmsDivAfter=get_field(stepDiag,'rmsDivParticleAfter',NaN); row.nVirtualWallCells=get_field(stepDiag,'nVirtualWallCells',get_field(get_field(stepDiag,'classic',struct()),'nVirtualWallCells',NaN)); row.nVirtualWallParticlesEquivalent=get_field(stepDiag,'nVirtualWallParticlesEquivalent',get_field(get_field(stepDiag,'classic',struct()),'nVirtualWallParticlesEquivalent',NaN)); row.virtualWallMassTotal=get_field(stepDiag,'virtualWallMassTotal',get_field(get_field(stepDiag,'classic',struct()),'virtualWallMassTotal',NaN)); row.massRegCells=get_field(massRegDiag,'nCellsRegularized',NaN); row.massRegParticles=get_field(massRegDiag,'nParticlesRegularized',NaN); row.massRegCellsCumulative=get_field(massRegDiag,'nCellsRegularizedCumulative',NaN); row.massRegParticlesCumulative=get_field(massRegDiag,'nParticlesRegularizedCumulative',NaN); row.massRegRelStdBefore=get_field(massRegDiag,'meanRelStdBefore',NaN); row.massRegRelStdAfter=get_field(massRegDiag,'meanRelStdAfter',NaN); row.massRegEnergyResidualRelRms=get_field(massRegDiag,'energyResidualRelRms',NaN); row.massRegMomentumResidualRms=get_field(massRegDiag,'momentumResidualRms',NaN);
 end
 function row = empty_timeseries_row()
-row = struct('step',NaN,'t',NaN,'NpActive',NaN,'Nfree',NaN,'NMin',NaN,'NMax',NaN,'NStd',NaN,'MRelRms',NaN,'mParticleRelStd',NaN,'mParticleMin',NaN,'mParticleMax',NaN,'kBTWeighted',NaN,'meanVxWeighted',NaN,'centerMinusWall',NaN,'centerVelocity',NaN,'wallMeanVelocity',NaN,'insertedParticles',NaN,'insertedParticlesCumulative',NaN,'extractedParticles',NaN,'extractedParticlesCumulative',NaN,'remapMassResidualRelRms',NaN,'remapMomentumResidualRms',NaN,'remapMassSafetyCells',NaN,'thermostatKBTAfter',NaN,'rmsDivBefore',NaN,'rmsDivAfter',NaN,'nVirtualWallCells',NaN,'nVirtualWallParticlesEquivalent',NaN,'virtualWallMassTotal',NaN);
+row = struct('step',NaN,'t',NaN,'NpActive',NaN,'Nfree',NaN,'NMin',NaN,'NMax',NaN,'NStd',NaN,'MRelRms',NaN,'mParticleRelStd',NaN,'mParticleMin',NaN,'mParticleMax',NaN,'kBTWeighted',NaN,'meanVxWeighted',NaN,'centerMinusWall',NaN,'centerVelocity',NaN,'wallMeanVelocity',NaN,'insertedParticles',NaN,'insertedParticlesCumulative',NaN,'extractedParticles',NaN,'extractedParticlesCumulative',NaN,'remapMassResidualRelRms',NaN,'remapMomentumResidualRms',NaN,'remapMassSafetyCells',NaN,'thermostatKBTAfter',NaN,'rmsDivBefore',NaN,'rmsDivAfter',NaN,'nVirtualWallCells',NaN,'nVirtualWallParticlesEquivalent',NaN,'virtualWallMassTotal',NaN,'massRegCells',NaN,'massRegParticles',NaN,'massRegCellsCumulative',NaN,'massRegParticlesCumulative',NaN,'massRegRelStdBefore',NaN,'massRegRelStdAfter',NaN,'massRegEnergyResidualRelRms',NaN,'massRegMomentumResidualRms',NaN);
 end
 function row = summarize_case(c,outCase,opts)
-T=outCase.summary; last=T(end,:); visc=outCase.viscosity; row=empty_summary_row(); row.label={c.label}; row.method={c.method}; row.finalStep=last.step; row.finalTime=last.t; row.finalNMin=last.NMin; row.finalNMax=last.NMax; row.finalMRelRms=last.MRelRms; row.finalKBT=last.kBTWeighted; row.finalMassRelStd=last.mParticleRelStd; row.insertedCum=last.insertedParticlesCumulative; row.extractedCum=last.extractedParticlesCumulative; row.centerMinusWallFinal=last.centerMinusWall; row.wallMeanVelocityFinal=last.wallMeanVelocity; row.nuEff=get_field(visc,'nuEff',NaN); row.R2=get_field(visc,'R2',NaN); row.signalToNoise=get_field(visc,'signalToNoise',NaN); row.physicalCandidate=double(get_field(visc,'physicalCandidate',false)); row.fitTMin=get_field(visc,'tMin',NaN); row.fitTMax=get_field(visc,'tMax',NaN); row.bodyForceX=opts.bodyForceX; row.wallVirtualParticlesEnable=double(opts.wallVirtualParticlesEnable); row.nVirtualWallParticlesEquivalentFinal=last.nVirtualWallParticlesEquivalent; row.virtualWallMassTotalFinal=last.virtualWallMassTotal; row.poiseuilleFitModel={get_field(visc,'fitModel','')}; row.nuEffSlip=get_field(visc,'nuEffSlip',NaN); row.R2Slip=get_field(visc,'R2Slip',NaN); row.nuEffNoSlip=get_field(visc,'nuEffNoSlip',NaN); row.R2NoSlip=get_field(visc,'R2NoSlip',NaN); row.slipVelocity=get_field(visc,'slipVelocity',NaN); row.slipRatio=get_field(visc,'slipRatio',NaN); row.wallSlipRatioObserved=get_field(visc,'wallSlipRatioObserved',NaN);
+T = outCase.summary;
+last = T(end,:);
+visc = outCase.viscosity;
+row = empty_summary_row();
+row.label={c.label}; row.method={c.method}; row.finalStep=last.step; row.finalTime=last.t; row.finalNMin=last.NMin; row.finalNMax=last.NMax; row.finalMRelRms=last.MRelRms; row.finalKBT=last.kBTWeighted; row.finalMassRelStd=last.mParticleRelStd; row.insertedCum=last.insertedParticlesCumulative; row.extractedCum=last.extractedParticlesCumulative; row.centerMinusWallFinal=last.centerMinusWall; row.wallMeanVelocityFinal=last.wallMeanVelocity; row.nuEff=get_field(visc,'nuEff',NaN); row.R2=get_field(visc,'R2',NaN); row.signalToNoise=get_field(visc,'signalToNoise',NaN); row.physicalCandidate=double(get_field(visc,'physicalCandidate',false)); row.fitTMin=get_field(visc,'tMin',NaN); row.fitTMax=get_field(visc,'tMax',NaN); row.bodyForceX=opts.bodyForceX; row.wallVirtualParticlesEnable=double(opts.wallVirtualParticlesEnable); row.nVirtualWallParticlesEquivalentFinal=last.nVirtualWallParticlesEquivalent; row.virtualWallMassTotalFinal=last.virtualWallMassTotal; row.poiseuilleFitModel={get_field(visc,'fitModel','')}; row.nuEffSlip=get_field(visc,'nuEffSlip',NaN); row.R2Slip=get_field(visc,'R2Slip',NaN); row.nuEffNoSlip=get_field(visc,'nuEffNoSlip',NaN); row.R2NoSlip=get_field(visc,'R2NoSlip',NaN); row.slipVelocity=get_field(visc,'slipVelocity',NaN); row.slipRatio=get_field(visc,'slipRatio',NaN); row.wallSlipRatioObserved=get_field(visc,'wallSlipRatioObserved',NaN);
+if any(strcmp('massRegCellsCumulative', T.Properties.VariableNames))
+    row.massRegCellsCum = last.massRegCellsCumulative;
+    row.massRegParticlesCum = last.massRegParticlesCumulative;
+    idxReg = find(T.massRegCells > 0, 1, 'last');
+    if ~isempty(idxReg)
+        row.massRegRelStdBeforeLast = T.massRegRelStdBefore(idxReg);
+        row.massRegRelStdAfterLast = T.massRegRelStdAfter(idxReg);
+    end
+end
 end
 function row = empty_summary_row()
-row = struct('label',{{''}},'method',{{''}},'finalStep',NaN,'finalTime',NaN,'finalNMin',NaN,'finalNMax',NaN,'finalMRelRms',NaN,'finalKBT',NaN,'finalMassRelStd',NaN,'insertedCum',NaN,'extractedCum',NaN,'centerMinusWallFinal',NaN,'wallMeanVelocityFinal',NaN,'nuEff',NaN,'R2',NaN,'signalToNoise',NaN,'physicalCandidate',NaN,'fitTMin',NaN,'fitTMax',NaN,'bodyForceX',NaN,'wallVirtualParticlesEnable',NaN,'nVirtualWallParticlesEquivalentFinal',NaN,'virtualWallMassTotalFinal',NaN,'poiseuilleFitModel',{{''}},'nuEffSlip',NaN,'R2Slip',NaN,'nuEffNoSlip',NaN,'R2NoSlip',NaN,'slipVelocity',NaN,'slipRatio',NaN,'wallSlipRatioObserved',NaN);
+row = struct('label',{{''}},'method',{{''}},'finalStep',NaN,'finalTime',NaN,'finalNMin',NaN,'finalNMax',NaN,'finalMRelRms',NaN,'finalKBT',NaN,'finalMassRelStd',NaN,'insertedCum',NaN,'extractedCum',NaN,'centerMinusWallFinal',NaN,'wallMeanVelocityFinal',NaN,'nuEff',NaN,'R2',NaN,'signalToNoise',NaN,'physicalCandidate',NaN,'fitTMin',NaN,'fitTMax',NaN,'bodyForceX',NaN,'wallVirtualParticlesEnable',NaN,'nVirtualWallParticlesEquivalentFinal',NaN,'virtualWallMassTotalFinal',NaN,'poiseuilleFitModel',{{''}},'nuEffSlip',NaN,'R2Slip',NaN,'nuEffNoSlip',NaN,'R2NoSlip',NaN,'slipVelocity',NaN,'slipRatio',NaN,'wallSlipRatioObserved',NaN,'massRegCellsCum',NaN,'massRegParticlesCum',NaN,'massRegRelStdBeforeLast',NaN,'massRegRelStdAfterLast',NaN);
 end
 
 
@@ -332,25 +367,59 @@ function s = empty_counter_stats(), s=struct('cumulativeParticles',0,'cumulative
 function s = update_counter_stats(s,n,c,step), if isfinite(n)&&n>0, s.cumulativeParticles=s.cumulativeParticles+n; s.cumulativeCells=s.cumulativeCells+c; s.maxParticlesPerStep=max(s.maxParticlesPerStep,n); s.lastStep=step; end; end
 function d = attach_insert_cumulative(d,s), d.nInsertedParticlesCumulative=s.cumulativeParticles; d.nInsertedCellsCumulative=s.cumulativeCells; d.maxInsertedParticlesPerStep=s.maxParticlesPerStep; d.lastInsertionStep=s.lastStep; end
 function d = attach_extract_cumulative(d,s), d.nExtractedParticlesCumulative=s.cumulativeParticles; d.nExtractedCellsCumulative=s.cumulativeCells; d.maxExtractedParticlesPerStep=s.maxParticlesPerStep; d.lastExtractionStep=s.lastStep; end
+function d = attach_mass_regularization_cumulative(d,s), d.nParticlesRegularizedCumulative=s.cumulativeParticles; d.nCellsRegularizedCumulative=s.cumulativeCells; d.maxParticlesRegularizedPerStep=s.maxParticlesPerStep; d.lastMassRegularizationStep=s.lastStep; end
 function d = empty_insert_diag(), d=struct('nInsertedParticles',0,'nCellsInserted',0,'nPoorCellsAfter',NaN,'nOverCellsAfter',NaN); end
 function d = empty_extract_diag(), d=struct('nExtractedParticles',0,'nCellsExtracted',0,'nPoorCellsAfter',NaN,'nOverCellsAfter',NaN); end
 function d = empty_remap_diag(), d=struct('massResidualRelRms',NaN,'momentumResidualRms',NaN,'nCellsMassSafetyApplied',NaN); end
 function d = empty_thermostat_diag(), d=struct('enabled',false,'meanKBTAfter',NaN); end
+function d = empty_mass_regularization_diag(), d=struct('enabled',false,'nCellsRegularized',0,'nParticlesRegularized',0,'meanRelStdBefore',NaN,'meanRelStdAfter',NaN,'energyResidualRelRms',NaN,'momentumResidualRms',NaN); end
+function tf = should_apply_mass_regularization(step, opts)
+tf = false;
+if ~opts.massRegularizationEnable
+    return;
+end
+steps = opts.massRegularizationSteps;
+if ~isempty(steps) && any(step == steps)
+    tf = true;
+    return;
+end
+if isempty(steps) && opts.massRegularizationEvery > 0 && mod(step, opts.massRegularizationEvery) == 0
+    tf = true;
+end
+end
 function v = get_field(s,name,defaultValue)
 if isstruct(s) && isfield(s,name) && ~isempty(s.(name)), v=s.(name); else, v=defaultValue; end
 end
 
 function opts = parse_options(varargin)
-opts=struct(); opts.outputRoot=fullfile('runs','resamp_poiseuille_wallvp_validation'); opts.cases={'classic_wallvp_reference','q6_resampled_wallvp'}; opts.Nx=64; opts.Ny=32; opts.gamma=20; opts.NTarget=20; opts.NMin=14; opts.NMax=26; opts.steps=5000; opts.sampleEvery=50; opts.summaryEvery=100; opts.dt=0.005; opts.alphaDeg=90; opts.kBT=0.01; opts.particleMass=1.0; opts.bodyForceX=0.005; opts.wallModeY='bounceback'; opts.capacityFactor=2.0; opts.thermostatStrength=0.25; opts.projectionInterpolationMethod='nearest'; opts.extractSelectionMode='closest_to_cell_mean'; opts.insertVelocityMode='current_or_memory_pairwise'; opts.memoryMinParticles=14; opts.remapMethod='scale_preserve_velocity'; opts.massMinFactor=0.05; opts.massMaxFactor=20.0; opts.remapMassSafetyMode='uniform_mass_velocity_shift'; opts.massSafetyMinFactor=0.25; opts.massSafetyMaxFactor=4.0; opts.constraintTolerance=1e-10; opts.preservePreEditVelocity=true; opts.alwaysUsePreEditVelocityForRemap=false; opts.initialPoiseuilleProfileEnable=false; opts.initialPoiseuilleNuGuess=0.05; opts.initialPoiseuilleScale=1.0; opts.excludeWallCells=2; opts.fitStartFraction=0.5; opts.poiseuilleFitModel='slip'; opts.rngSeed=12345; opts.visualEvery=0; opts.figureId=720; opts.profileFigureId=721; opts.showProfileFigure=true; opts.saveFrames=false; opts.saveFrameEvery=100; opts.saveFinalFigures=true; opts.frameDirName='frames'; opts.particleMarkerSize=3; opts.pngResolution=150; opts.wallVirtualParticlesEnable=true; opts.wallVirtualParticlesGeometryMode='shifted_solid_fraction'; opts.wallVirtualParticlesForceRandomShiftY=true; opts.wallVirtualParticlesDensityFactor=1.0; opts.wallVirtualParticlesPerCell=[]; opts.wallVirtualParticleMass=1.0; opts.wallVirtualParticlesThermal=true; opts.wallVirtualParticlesKBT=0.01; opts.wallVirtualParticlesStochasticCount=true;
+opts=struct(); opts.outputRoot=fullfile('runs','resamp_poiseuille_wallvp_validation'); opts.cases={'classic_wallvp_reference','q6_resampled_wallvp'}; opts.massRegularizationEnable=false; opts.massRegularizationSteps=[]; opts.massRegularizationEvery=0; opts.massRegularizationStrength=1.0; opts.massRegularizationTriggerMode='always'; opts.massRegularizationRelStdTrigger=0.20; opts.massRegularizationMinFactor=0.25; opts.massRegularizationMaxFactor=4.0; opts.massRegularizationPreserveEnergy=true; opts.massRegularizationMinParticlesPerCell=2; opts.Nx=64; opts.Ny=32; opts.gamma=20; opts.NTarget=20; opts.NMin=14; opts.NMax=26; opts.steps=5000; opts.sampleEvery=50; opts.summaryEvery=100; opts.dt=0.005; opts.alphaDeg=90; opts.kBT=0.01; opts.particleMass=1.0; opts.bodyForceX=0.005; opts.wallModeY='bounceback'; opts.capacityFactor=2.0; opts.thermostatStrength=0.25; opts.projectionInterpolationMethod='nearest'; opts.extractSelectionMode='closest_to_cell_mean'; opts.insertVelocityMode='current_or_memory_pairwise'; opts.memoryMinParticles=14; opts.remapMethod='scale_preserve_velocity'; opts.massMinFactor=0.05; opts.massMaxFactor=20.0; opts.remapMassSafetyMode='uniform_mass_velocity_shift'; opts.massSafetyMinFactor=0.25; opts.massSafetyMaxFactor=4.0; opts.constraintTolerance=1e-10; opts.preservePreEditVelocity=true; opts.alwaysUsePreEditVelocityForRemap=false; opts.initialPoiseuilleProfileEnable=false; opts.initialPoiseuilleNuGuess=0.05; opts.initialPoiseuilleScale=1.0; opts.excludeWallCells=2; opts.fitStartFraction=0.5; opts.poiseuilleFitModel='slip'; opts.rngSeed=12345; opts.visualEvery=0; opts.figureId=720; opts.profileFigureId=721; opts.showProfileFigure=true; opts.saveFrames=false; opts.saveFrameEvery=100; opts.saveFinalFigures=true; opts.frameDirName='frames'; opts.particleMarkerSize=3; opts.pngResolution=150; opts.wallVirtualParticlesEnable=true; opts.wallVirtualParticlesGeometryMode='shifted_solid_fraction'; opts.wallVirtualParticlesForceRandomShiftY=true; opts.wallVirtualParticlesDensityFactor=1.0; opts.wallVirtualParticlesPerCell=[]; opts.wallVirtualParticleMass=1.0; opts.wallVirtualParticlesThermal=true; opts.wallVirtualParticlesKBT=0.01; opts.wallVirtualParticlesStochasticCount=true;
 if mod(numel(varargin),2)~=0, error('Options must be name/value pairs.'); end
 for k=1:2:numel(varargin)
     key=lower(char(string(varargin{k}))); val=varargin{k+1};
     switch key
         case 'outputroot', opts.outputRoot=char(string(val));
         case 'cases', opts.cases=val;
+        case 'massregularizationenable', opts.massRegularizationEnable=logical(val);
+        case {'massregularizationsteps','massregularizationstep'}, opts.massRegularizationSteps=val;
+        case 'massregularizationevery', opts.massRegularizationEvery=val;
+        case 'massregularizationstrength', opts.massRegularizationStrength=val;
+        case 'massregularizationtriggermode', opts.massRegularizationTriggerMode=lower(char(string(val)));
+        case 'massregularizationrelstdtrigger', opts.massRegularizationRelStdTrigger=val;
+        case 'massregularizationminfactor', opts.massRegularizationMinFactor=val;
+        case 'massregularizationmaxfactor', opts.massRegularizationMaxFactor=val;
+        case 'massregularizationpreserveenergy', opts.massRegularizationPreserveEnergy=logical(val);
+        case 'massregularizationminparticlespercell', opts.massRegularizationMinParticlesPerCell=val;
         case 'nx', opts.Nx=val; case 'ny', opts.Ny=val; case 'gamma', opts.gamma=val; opts.NTarget=val; case 'ntarget', opts.NTarget=val; case 'nmin', opts.NMin=val; case 'nmax', opts.NMax=val; case 'steps', opts.steps=val; case 'sampleevery', opts.sampleEvery=val; case 'summaryevery', opts.summaryEvery=val; case 'dt', opts.dt=val; case 'alphadeg', opts.alphaDeg=val; case 'kbt', opts.kBT=val; opts.wallVirtualParticlesKBT=val; case 'particlemass', opts.particleMass=val; opts.wallVirtualParticleMass=val; case 'bodyforcex', opts.bodyForceX=val; case 'wallmodey', opts.wallModeY=char(string(val)); case 'capacityfactor', opts.capacityFactor=val; case 'thermostatstrength', opts.thermostatStrength=val; case 'projectioninterpolationmethod', opts.projectionInterpolationMethod=char(string(val)); case 'extractselectionmode', opts.extractSelectionMode=lower(char(string(val))); case 'insertvelocitymode', opts.insertVelocityMode=lower(char(string(val))); case 'memoryminparticles', opts.memoryMinParticles=val; case 'remapmethod', opts.remapMethod=lower(char(string(val))); case 'massminfactor', opts.massMinFactor=val; case 'massmaxfactor', opts.massMaxFactor=val; case 'remapmasssafetymode', opts.remapMassSafetyMode=lower(char(string(val))); case 'masssafetyminfactor', opts.massSafetyMinFactor=val; case 'masssafetymaxfactor', opts.massSafetyMaxFactor=val; case 'constrainttolerance', opts.constraintTolerance=val; case 'preservepreeditvelocity', opts.preservePreEditVelocity=logical(val); case 'alwaysusepreeditvelocityforremap', opts.alwaysUsePreEditVelocityForRemap=logical(val); case 'initialpoiseuilleprofileenable', opts.initialPoiseuilleProfileEnable=logical(val); case 'initialpoiseuillenuguess', opts.initialPoiseuilleNuGuess=val; case 'initialpoiseuillescale', opts.initialPoiseuilleScale=val; case 'excludewallcells', opts.excludeWallCells=val; case 'fitstartfraction', opts.fitStartFraction=val; case 'poiseuillefitmodel', opts.poiseuilleFitModel=lower(char(string(val))); case 'visualevery', opts.visualEvery=val; case 'figureid', opts.figureId=val; case 'profilefigureid', opts.profileFigureId=val; case 'showprofilefigure', opts.showProfileFigure=logical(val); case 'saveframes', opts.saveFrames=logical(val); case 'saveframeevery', opts.saveFrameEvery=val; case 'savefinalfigures', opts.saveFinalFigures=logical(val); case 'framedirname', opts.frameDirName=char(string(val)); case 'particlemarkersize', opts.particleMarkerSize=val; case 'pngresolution', opts.pngResolution=val; case 'rngseed', opts.rngSeed=val;
         case 'wallvirtualparticlesenable', opts.wallVirtualParticlesEnable=logical(val); case 'wallvirtualparticlesgeometrymode', opts.wallVirtualParticlesGeometryMode=lower(char(string(val))); case 'wallvirtualparticlesforcerandomshifty', opts.wallVirtualParticlesForceRandomShiftY=logical(val); case 'wallvirtualparticlesdensityfactor', opts.wallVirtualParticlesDensityFactor=val; case 'wallvirtualparticlespercell', opts.wallVirtualParticlesPerCell=val; case 'wallvirtualparticlemass', opts.wallVirtualParticleMass=val; case 'wallvirtualparticlesthermal', opts.wallVirtualParticlesThermal=logical(val); case 'wallvirtualparticleskbt', opts.wallVirtualParticlesKBT=val; case 'wallvirtualparticlesstochasticcount', opts.wallVirtualParticlesStochasticCount=logical(val);
         otherwise, error('Unknown option: %s', key);
     end
 end
+if ischar(opts.massRegularizationSteps) || isstring(opts.massRegularizationSteps)
+    if strlength(string(opts.massRegularizationSteps)) == 0
+        opts.massRegularizationSteps = [];
+    else
+        opts.massRegularizationSteps = str2num(char(opts.massRegularizationSteps)); %#ok<ST2NM>
+    end
+end
+opts.massRegularizationSteps = opts.massRegularizationSteps(:)';
 end
